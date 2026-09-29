@@ -1,0 +1,120 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c6c8fa917fe5f4236a9bc17e360eeb04, type: 3}
+  m_Name: Typography
+  m_EditorClassIdentifier: 
+  font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+  displayLarge:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 57
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: -0.25
+    lineSpacing: 0
+  displayMedium:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 45
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  displaySmall:
+    font: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
+    fontSize: 36
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  headlineLarge:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 32
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  headlineMedium:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 28
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  headlineSmall:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 24
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  titleLarge:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 22
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0
+    lineSpacing: 0
+  titleMedium:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 16
+    fontWeight: 500
+    fontStyle: 0
+    characterSpacing: 0.15
+    lineSpacing: 0
+  titleSmall:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 14
+    fontWeight: 500
+    fontStyle: 0
+    characterSpacing: 0.1
+    lineSpacing: 0
+  bodyLarge:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 16
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0.5
+    lineSpacing: 0
+  bodyMedium:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 14
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0.25
+    lineSpacing: 0
+  bodySmall:
+    font: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
+    fontSize: 12
+    fontWeight: 400
+    fontStyle: 0
+    characterSpacing: 0.4
+    lineSpacing: 0
+  labelLarge:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 14
+    fontWeight: 500
+    fontStyle: 0
+    characterSpacing: 0.1
+    lineSpacing: 0
+  labelMedium:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 12
+    fontWeight: 500
+    fontStyle: 0
+    characterSpacing: 0.5
+    lineSpacing: 0
+  labelSmall:
+    font: {fileID: 11400000, guid: 3032b107aa22249a698df2a9785b5c71, type: 2}
+    fontSize: 11
+    fontWeight: 500
+    fontStyle: 0
+    characterSpacing: 0.5
+    lineSpacing: 0

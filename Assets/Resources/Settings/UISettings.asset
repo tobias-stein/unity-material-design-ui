@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7c6dc912e8e81486d9235cbbc37d6037, type: 3}
+  m_Name: UISettings
+  m_EditorClassIdentifier: 
+  _breakpoints:
+    mobileMax: 599
+    tabletMax: 1199
+  _useDarkTheme: 0
+  _colors: {fileID: 11400000, guid: df5253a9edfbd4910adcd054b3febc63, type: 2}
+  _typography: {fileID: 11400000, guid: 7273bb5d14ac94d2192fb7c9d66d1a17, type: 2}
+  _spacesSizes: {fileID: 11400000, guid: 0d18a51dd9ea64ccf9ec24f8a2ee8dd2, type: 2}
+  _defaultDeviceType: 3

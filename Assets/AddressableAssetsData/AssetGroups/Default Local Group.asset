@@ -1,0 +1,155 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Default Local Group
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Default Local Group
+  m_GUID: a4594a2abb4474d7eb101ebf69c6acea
+  m_SerializeEntries:
+  - m_GUID: 0f9f01436107b418f8bd888f443c3a30
+    m_Address: mdu.ui.GridView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 2e2f34919e4164520879970e7657f2b7
+    m_Address: mdu.ui.Text
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 49ece7692ab32450ebba0465364f9945
+    m_Address: mdu.ui.Snackbar
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 4a21540b2238a4e93a6e799aaacc9669
+    m_Address: mdu.ui.Tooltip
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 569f3270133db4efca0d3260609b23c4
+    m_Address: mdu.ui.AppBar
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 6cf5376a0a1e047e98ec2150692dbc42
+    m_Address: mdu.ui.Surface
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8720a956a34cc44e994ad5131b5c04da
+    m_Address: mdu.ui.Icon
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8be9d3fbaf3ee42d28eb8104121859f0
+    m_Address: mdu.ui.GridViewCell
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8c3e924f80e77483d992e47c67339123
+    m_Address: mdu.ui.Seperator
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 8ff685e4a7efd4609ba489d5204520e7
+    m_Address: mdu.ui.Chip
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 90567ad33be984316ab040bb0960db71
+    m_Address: mdu.ui.Slider
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 95b313cd378b94bb183ba9ebbee9f65a
+    m_Address: mdu.ui.UIDemoComparePanel
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 96532d5f5d4c24230bc62a8ea8d532d9
+    m_Address: mdu.ui.NavigationRail
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 9f66fd901c6bb4d8bbee57985968ddaa
+    m_Address: mdu.ui.Button
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a660fe167b2554925857694aea4fd5d2
+    m_Address: mdu.ui.demo.UIDemoCompareView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: a77d68c1dfa884e408ec97d5c770e1dc
+    m_Address: mdu.ui.demo.UIDemoMainMenu
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: aabba3810bd294e808828e70250a120f
+    m_Address: mdu.ui.ListItem
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: ad51678460dab4b46b7b7a1ebb62b56d
+    m_Address: mdu.ui.ButtonGroup
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b06df0afeeb564fd7a3b204e3611154e
+    m_Address: mdu.ui.LoadingIndicator
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: b0cd1e910960840dd9f9e09bfe6ac21a
+    m_Address: mdu.Dialog
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: ba20767ee2e964999ac7f7ca5a86a36c
+    m_Address: mdu.ui.WindowFrame
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: e0db12f4207ca4179be392bbd29fa4dd
+    m_Address: mdu.ui.Switch
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 752e168d0015f422ebbab621595e9597, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: cbac7a4a0a33b42608991eb2d9d7af97, type: 2}
+    - {fileID: 11400000, guid: 48f25e62856e54b85a48b3df19114483, type: 2}

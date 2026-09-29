@@ -1,0 +1,83 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c4de701df71544e7d92f269a6f9c4265, type: 3}
+  m_Name: SpacesSizes
+  m_EditorClassIdentifier: 
+  mobileSpacing:
+    xs: 4
+    sm: 8
+    md: 16
+    lg: 24
+    xl: 32
+    xxl: 48
+    componentPadding: 16
+    sectionMargin: 24
+    screenMargin: 16
+  mobileSizes:
+    minTouchTarget: 48
+    minClickTarget: 48
+    iconSm: 16
+    iconMd: 24
+    iconLg: 32
+    buttonHeight: 48
+    inputHeight: 56
+    toolbarHeight: 56
+    bottomNavHeight: 80
+    navRailWidth: 0
+    contentMaxWidth: 3.4028235e+38
+    cardMinWidth: 280
+  tabletSpacing:
+    xs: 6
+    sm: 12
+    md: 24
+    lg: 36
+    xl: 48
+    xxl: 72
+    componentPadding: 24
+    sectionMargin: 36
+    screenMargin: 24
+  tabletSizes:
+    minTouchTarget: 48
+    minClickTarget: 48
+    iconSm: 20
+    iconMd: 28
+    iconLg: 40
+    buttonHeight: 52
+    inputHeight: 64
+    toolbarHeight: 64
+    bottomNavHeight: 72
+    navRailWidth: 0
+    contentMaxWidth: 840
+    cardMinWidth: 320
+  desktopSpacing:
+    xs: 8
+    sm: 16
+    md: 32
+    lg: 48
+    xl: 64
+    xxl: 96
+    componentPadding: 32
+    sectionMargin: 48
+    screenMargin: 32
+  desktopSizes:
+    minTouchTarget: 48
+    minClickTarget: 32
+    iconSm: 24
+    iconMd: 32
+    iconLg: 48
+    buttonHeight: 40
+    inputHeight: 48
+    toolbarHeight: 48
+    bottomNavHeight: 0
+    navRailWidth: 80
+    contentMaxWidth: 1200
+    cardMinWidth: 360
