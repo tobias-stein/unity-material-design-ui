@@ -19,7 +19,6 @@ namespace mdu.editor.ui
             }
         }
 
-        [MenuItem("Darwins Tower/Tools/Process All UI Views and Components for Addressables")]
         private static void ProcessAllUIViews()
         {
             var settings = AddressableAssetSettingsDefaultObject.GetSettings(true);
