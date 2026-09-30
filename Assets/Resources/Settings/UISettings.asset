@@ -15,7 +15,7 @@ MonoBehaviour:
   _breakpoints:
     mobileMax: 599
     tabletMax: 1199
-  _useDarkTheme: 0
+  _useDarkTheme: 1
   _colors: {fileID: 11400000, guid: df5253a9edfbd4910adcd054b3febc63, type: 2}
   _typography: {fileID: 11400000, guid: 7273bb5d14ac94d2192fb7c9d66d1a17, type: 2}
   _spacesSizes: {fileID: 11400000, guid: 0d18a51dd9ea64ccf9ec24f8a2ee8dd2, type: 2}
