@@ -7,6 +7,7 @@ using Cysharp.Threading.Tasks;
 
 #if UNITY_EDITOR
 using UnityEditor;
+using UnityEditor.SceneManagement;
 #endif
 using UnityEngine;
 using UnityEngine.AddressableAssets;
@@ -112,10 +113,10 @@ namespace mdu.ui
         {
             try
             {
-                if (UnityEngine.Application.isPlaying)
+                // if (UnityEngine.Application.isPlaying)
                 {
 #if UNITY_EDITOR
-                    if (UnityEditor.PrefabUtility.IsPartOfPrefabAsset(gameObject))
+                    if (PrefabUtility.IsPartOfPrefabAsset(gameObject) || PrefabStageUtility.GetPrefabStage(gameObject) != null)
                     {
                         return; // never set id for prefabs
                     }
