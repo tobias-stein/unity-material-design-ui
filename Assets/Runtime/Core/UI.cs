@@ -331,7 +331,24 @@ namespace mdu.ui
             uiSettings.onChanged += applyUISettings;
 
             UI._current = this;
+            
+#if UNITY_EDITOR
+            EditorApplication.playModeStateChanged -= onPlayModeStateChanged;
+            EditorApplication.playModeStateChanged += onPlayModeStateChanged;
+#endif // UNITY_EDITOR
         }
+
+#if UNITY_EDITOR
+    private void onPlayModeStateChanged(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.ExitingPlayMode)
+        {
+            Dispose();
+            EditorApplication.playModeStateChanged -= onPlayModeStateChanged;
+        }
+    }
+#endif // UNITY_EDITOR
+
 
         public void Dispose()
         {
