@@ -35,6 +35,7 @@ namespace mdu.ui
         public bool isPooled { get; }
         public string id { get; }
         RectTransform rectTransform { get; }
+        IBinder binder { get; }
 
         void Constructor();
 
@@ -63,6 +64,8 @@ namespace mdu.ui
         public bool isPooled => _isPooled;
 
         public readonly Binder<TData> binder = new Binder<TData>();
+
+        IBinder IUI.binder => binder;
 
         public string id => _id;
 
@@ -375,6 +378,7 @@ namespace mdu.ui
         {
             if(UI._current == null) { return; }
 
+            _settings.onChanged -= applyUISettings;
             SceneManager.sceneLoaded -= onSceneLoaded;
             SceneManager.sceneUnloaded -= onSceneUnloaded;
 
@@ -505,6 +509,7 @@ namespace mdu.ui
             {
                 if(ui.isPooled) { continue; }
 
+                ui.binder.clear();
                 ui.setupUI(uiSettings);
                 ui.refresh();
             }

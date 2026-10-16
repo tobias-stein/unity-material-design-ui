@@ -280,6 +280,7 @@ namespace mdu.ui
             });
             binder.bind(data => data.style, value =>
             {
+                _onHoverStateChange = null;
                 labelColorRole = UISettings.ColorRole.Primary;
                 labelDisableColorRole = UISettings.ColorRole.OnSurface;
                 labelOpacity = 1.0f;
