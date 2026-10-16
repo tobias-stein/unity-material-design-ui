@@ -49,13 +49,13 @@ namespace mdu.editor.ui
             var currentStage = PrefabStageUtility.GetCurrentPrefabStage();
             if (currentStage == null) return;
 
-            IUI[] uis = currentStage.prefabContentsRoot.GetComponentsInChildren<IUI>(true);
             using (ListPool<IUI>.Get(out var buffer))
             {
                 currentStage.prefabContentsRoot.GetComponentsInChildren<IUI>(true, buffer);
                 buffer.Reverse(); // traverse UIs BOTTOM-UP
                 foreach (var ui in buffer)
                 {
+                    ui.binder.clear();
                     ui.setupUI(uiSettings);
                     ui.refresh();
                 }
@@ -82,6 +82,7 @@ namespace mdu.editor.ui
                         buffer.Reverse(); // traverse UIs BOTTOM-UP
                         foreach (var ui in buffer)
                         {
+                            ui.binder.clear();
                             ui.setupUI(uiSettings);
                             ui.refresh();
                         }

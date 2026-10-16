@@ -150,16 +150,21 @@ namespace mdu
                 {
                     string dependsOnName = GetPropertyName(dependencyExpression);
 
+                    if (!_dependencies.ContainsKey(dependsOnName))
+                    {
+                        _dependencies[dependsOnName] = new List<string>();
+                    }
+                    else if (_dependencies[dependsOnName].Contains(propertyName))
+                    {
+                        continue; // dependency already registered
+                    }
+
                     // Safety Check: Ensure this new dependency doesn't create a circle.
                     if (checkCircularDependency(propertyName, dependsOnName))
                     {
                         throw new InvalidOperationException($"Circular dependency detected. Cannot make '{propertyName}' depend on '{dependsOnName}' as '{dependsOnName}' (or one of its dependencies) already depends on '{propertyName}'.");
                     }
 
-                    if (!_dependencies.ContainsKey(dependsOnName))
-                    {
-                        _dependencies[dependsOnName] = new List<string>();
-                    }
                     _dependencies[dependsOnName].Add(propertyName);
                 }
             }

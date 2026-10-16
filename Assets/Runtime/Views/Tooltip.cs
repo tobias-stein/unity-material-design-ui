@@ -146,8 +146,11 @@ namespace mdu.ui
             });
             binder.bind(data => data.noBackground, value => _sdf.enabled = !value);
 
-            binder.onBindingCompleted += data => updateTooltip();
+            binder.onBindingCompleted -= onBindingCompleted;
+            binder.onBindingCompleted += onBindingCompleted;
         }
+
+        private void onBindingCompleted(TooltipData data) => updateTooltip();
 
         private void updateTooltip()
         {
