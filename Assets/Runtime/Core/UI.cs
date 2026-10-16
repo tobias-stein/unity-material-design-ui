@@ -13,6 +13,7 @@ using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.EventSystems;
 using UnityEngine.Pool;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace mdu.ui
@@ -39,6 +40,8 @@ namespace mdu.ui
 
         void setupUI(UISettings uISettings);
         void refresh();
+
+        void ensureUniqueId(HashSet<string> takenIds);
 #if UNITY_EDITOR
         void OnValidate();
 #endif
@@ -109,6 +112,16 @@ namespace mdu.ui
         }
 
 
+        public void ensureUniqueId(HashSet<string> takenIds)
+        {
+            if (!string.IsNullOrEmpty(_id) && takenIds.Add(_id))
+            {
+                return;
+            }
+
+            _id = Guid.NewGuid().ToString("N");
+        }
+
         public virtual void Constructor()
         {
             try
@@ -135,10 +148,7 @@ namespace mdu.ui
                 //if (!UnityEngine.Application.isPlaying)
                 {
                     // propagate value changes to the editor _data 
-                    binder.onBindingChanged += (data, fieldName) =>
-                    {
-                        _data = data;
-                    };
+                    binder.onBindingChanged += (data, fieldName) => _data = data;
                     binder.onBindingCompleted += (data) => _data = data;
                 }
 
@@ -226,6 +236,7 @@ namespace mdu.ui
         private readonly UISettings _settings;
         private readonly GameObject _uiRoot;
         internal readonly Dictionary<string, IUI> _uiElements;
+        private readonly Dictionary<int, List<IUI>> _sceneElements;
 
         internal static UI _current = null;
 
@@ -266,6 +277,7 @@ namespace mdu.ui
         public UI(UISettings uiSettings)
         {
             _uiElements = new Dictionary<string, IUI>();
+            _sceneElements = new Dictionary<int, List<IUI>>();
             _rebuildScheduled = false;
             _cancellationTokenSource = new CancellationTokenSource();
             _viewManager = new ViewManager();
@@ -278,6 +290,8 @@ namespace mdu.ui
             _uiRoot = new GameObject("UI");
             var uiDebug = _uiRoot.AddComponent<UIDebug>();
             uiDebug.uISettings = uiSettings;
+
+            UnityEngine.Object.DontDestroyOnLoad(_uiRoot);
 
             foreach (var layerName in canvasLayerNames)
             {
@@ -331,6 +345,13 @@ namespace mdu.ui
             uiSettings.onChanged += applyUISettings;
 
             UI._current = this;
+
+            SceneManager.sceneLoaded -= onSceneLoaded;
+            SceneManager.sceneLoaded += onSceneLoaded;
+            SceneManager.sceneUnloaded -= onSceneUnloaded;
+            SceneManager.sceneUnloaded += onSceneUnloaded;
+
+            adoptScene(SceneManager.GetActiveScene());
             
 #if UNITY_EDITOR
             EditorApplication.playModeStateChanged -= onPlayModeStateChanged;
@@ -353,8 +374,128 @@ namespace mdu.ui
         public void Dispose()
         {
             if(UI._current == null) { return; }
+
+            SceneManager.sceneLoaded -= onSceneLoaded;
+            SceneManager.sceneUnloaded -= onSceneUnloaded;
+
             UI._current._viewManager.Dispose();
             UI._current = null;
+        }
+
+        private void onSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            adoptScene(scene);
+        }
+
+        private void onSceneUnloaded(Scene scene)
+        {
+            if (!_sceneElements.TryGetValue(scene.handle, out var sceneElements))
+            {
+                return;
+            }
+
+            _sceneElements.Remove(scene.handle);
+
+            foreach (var element in sceneElements)
+            {
+                if (element is not Component elementComponent || elementComponent == null)
+                {
+                    continue;
+                }
+
+                UnityEngine.Object.Destroy(elementComponent.gameObject);
+            }
+        }
+
+        private void adoptScene(Scene scene)
+        {
+            if (_sceneElements.ContainsKey(scene.handle))
+            {
+                return;
+            }
+
+            var sceneElements = new List<IUI>();
+            var buffer = new List<IUI>();
+
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                buffer.Clear();
+                root.GetComponentsInChildren<IUI>(true, buffer);
+                sceneElements.AddRange(buffer);
+            }
+
+            if (sceneElements.Count == 0)
+            {
+                return;
+            }
+
+            var adopted = new List<IUI>();
+
+            foreach (var element in sceneElements)
+            {
+                if (element is not Component component) { continue; }
+
+                if (element is IView view)
+                {
+                    component.transform.SetParent(_canvas[(int)view.layer].transform, false);
+                    adopted.Add(element);
+                }
+                else if (!hasUIAncestor(component.transform))
+                {
+                    component.transform.SetParent(_canvas[(int)CanvasLayer.DEFAULT].transform, false);
+                    adopted.Add(element);
+                }
+            }
+
+            foreach (var element in adopted)
+            {
+                if (element is Component component)
+                {
+                    construct(component.gameObject);
+                }
+            }
+
+            ensureUniqueSceneIds(sceneElements);
+
+            _sceneElements[scene.handle] = adopted;
+        }
+
+        private static bool hasUIAncestor(Transform transform)
+        {
+            var parent = transform.parent;
+
+            while (parent != null)
+            {
+                if (parent.GetComponent<IUI>() != null)
+                {
+                    return true;
+                }
+
+                parent = parent.parent;
+            }
+
+            return false;
+        }
+
+        private void ensureUniqueSceneIds(List<IUI> sceneElements)
+        {
+            var takenIds = new HashSet<string>(_uiElements.Keys);
+
+            foreach (var adoptedElements in _sceneElements.Values)
+            {
+                foreach (var element in adoptedElements)
+                {
+                    if (!string.IsNullOrEmpty(element.id))
+                    {
+                        takenIds.Add(element.id);
+                    }
+                }
+            }
+
+            foreach (var element in sceneElements)
+            {
+                element.ensureUniqueId(takenIds);
+            }
         }
 
         private void applyUISettings(UISettings uiSettings)
