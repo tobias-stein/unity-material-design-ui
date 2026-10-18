@@ -12,6 +12,13 @@ namespace mdu.ui
         private readonly Stack<ViewContext> _viewStack = new Stack<ViewContext>(8);
 
         /// <summary>
+        /// Raised after a view transition completed and the (new) top view is fully
+        /// active — i.e. after its show/transition-in finished. Used e.g. by
+        /// telemetry snapshot triggers.
+        /// </summary>
+        public event Action<IView> onViewActivated;
+
+        /// <summary>
         /// Gets the currently active (top) ViewContext.
         /// Can be null if the stack is empty.
         /// </summary>
@@ -88,6 +95,8 @@ namespace mdu.ui
                 _contextSwitchCTS.Token.ThrowIfCancellationRequested();
                 await context.setActive(true, false, _contextSwitchCTS.Token);
 
+                onViewActivated?.Invoke(context.mainView);
+
                 return context.mainView as TView;
             }
             catch (OperationCanceledException)
@@ -134,6 +143,7 @@ namespace mdu.ui
                 if (currentContext != null)
                 {
                     await currentContext.setActive(true, false, _contextSwitchCTS.Token);
+                    onViewActivated?.Invoke(currentContext.mainView);
                 }
             }
             catch (OperationCanceledException)

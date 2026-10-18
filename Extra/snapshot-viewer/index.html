@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UI Snapshot Viewer — Material Design</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">Snapshot&nbsp;Viewer</div>
+    <button id="openBtn" class="btn primary">Open snapshot…</button>
+    <input type="file" id="fileInput" accept=".yaml,.yml,.gz,.yaml.gz" hidden>
+    <button id="sampleBtn" class="btn ghost" title="Requires serving this folder over http (see README)">Load sample</button>
+    <div class="spacer"></div>
+    <div class="segmented" id="modeToggle" role="tablist" aria-label="Render mode">
+      <button data-mode="replica" class="active" role="tab">Replica</button>
+      <button data-mode="flex" role="tab">Flex</button>
+    </div>
+    <label class="toggle" title="Outline layout containers">
+      <input type="checkbox" id="debugOutline"> layout boxes
+    </label>
+    <div id="status" class="status">No snapshot loaded</div>
+  </header>
+
+  <main>
+    <aside class="panel left">
+      <h2>Tree</h2>
+      <div id="tree" class="tree empty-state">—</div>
+    </aside>
+
+    <section id="viewport">
+      <div id="stageWrap">
+        <div id="stage" aria-label="Rendered snapshot"></div>
+      </div>
+      <div id="empty" class="empty">
+        <div class="empty-card">
+          <h1>Drop a snapshot here</h1>
+          <p>Exported from Unity at <code>…/Telemetry/snapshots/*.yaml</code><br>
+             (<code>.yaml.gz</code> also supported)</p>
+          <button id="emptyOpenBtn" class="btn primary">Open snapshot…</button>
+        </div>
+      </div>
+      <div id="dropOverlay" class="drop-overlay hidden">Drop snapshot to load</div>
+      <div id="zoomBadge" class="zoom-badge hidden">100%</div>
+    </section>
+
+    <aside class="panel right">
+      <h2>Inspector</h2>
+      <div id="inspectorBody" class="inspector empty-state">Select an element to inspect its id, roles, layout and data.</div>
+    </aside>
+  </main>
+
+  <script src="vendor/js-yaml.min.js"></script>
+  <script src="viewer.js"></script>
+</body>
+</html>

@@ -402,7 +402,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 4217893315045485000, guid: 2e2f34919e4164520879970e7657f2b7, type: 3}
       propertyPath: m_fontColor32.rgba
-      value: 4294917931
+      value: 4294917426
       objectReference: {fileID: 0}
     - target: {fileID: 6891460847929998822, guid: 2e2f34919e4164520879970e7657f2b7, type: 3}
       propertyPath: m_Pivot.x
@@ -708,7 +708,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6245335494976813731, guid: 8720a956a34cc44e994ad5131b5c04da, type: 3}
       propertyPath: m_SizeDelta.x
-      value: 20
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 6245335494976813731, guid: 8720a956a34cc44e994ad5131b5c04da, type: 3}
       propertyPath: m_SizeDelta.y
@@ -772,7 +772,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6414256163588854878, guid: 8720a956a34cc44e994ad5131b5c04da, type: 3}
       propertyPath: m_FontData.m_FontSize
-      value: 20
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

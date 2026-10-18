@@ -1,0 +1,492 @@
+# Sample snapshot — schemaVersion 1
+# Mirrors the exact shape produced by Assets/Runtime/Telemetry (UISnapshotExporter).
+# Note: the viewer derives hierarchy from parentId + siblingIndex; exported
+# `children` id-lists are ignored on load.
+
+schemaVersion: 1
+timestampUtc: 2026-10-17T14:30:00Z
+app:
+  productName: Unity-MaterialDesign-UI
+  productVersion: 1.0.0
+  unityVersion: 6000.2.7f2
+  platform: OSXEditor
+  deviceType: Desktop
+  screenWidth: 1728
+  screenHeight: 1117
+  scaleFactor: 2
+view:
+  id: 9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f
+  name: UIDemoMainMenu
+  type: mdu.ui.UIDemoMainMenu
+  layer: DEFAULT
+theme:
+  seedColor: '#6750A4'
+  isDark: false
+  deviceType: Desktop
+  palette:
+    Primary: '#6750A4'
+    OnPrimary: '#FFFFFF'
+    PrimaryContainer: '#EADDFF'
+    OnPrimaryContainer: '#21005D'
+    Secondary: '#625B71'
+    OnSecondary: '#FFFFFF'
+    SecondaryContainer: '#E8DEF8'
+    OnSecondaryContainer: '#1D192B'
+    Tertiary: '#7D5260'
+    Error: '#B3261E'
+    OnError: '#FFFFFF'
+    Background: '#FEF7FF'
+    OnBackground: '#1D1B20'
+    Surface: '#FEF7FF'
+    OnSurface: '#1D1B20'
+    SurfaceVariant: '#E7E0EC'
+    OnSurfaceVariant: '#49454F'
+    SurfaceDim: '#DED8E1'
+    SurfaceBright: '#FEF7FF'
+    SurfaceContainer: '#F3EDF7'
+    SurfaceContainerLow: '#F7F2FA'
+    SurfaceContainerLowest: '#FFFFFF'
+    SurfaceContainerHigh: '#ECE6F0'
+    SurfaceContainerHighest: '#E6E0E9'
+    Surface1: '#F6F2FA'
+    Surface2: '#F2EDF7'
+    Surface3: '#ECE6F0'
+    Surface4: '#E9E3EE'
+    Surface5: '#E4DEE9'
+    Outline: '#79747E'
+    OutlineVariant: '#CAC4D0'
+    Shadow: '#000000'
+    InverseSurface: '#322F35'
+    InverseOnSurface: '#F5EFF7'
+    InversePrimary: '#D0BCFF'
+  spacing:
+    None: 0
+    XS: 8
+    SM: 16
+    MD: 32
+    LG: 48
+    XL: 64
+    XXL: 96
+  sizing:
+    IconSm: 24
+    IconMd: 36
+    IconLg: 48
+    ButtonHeight: 48
+    InputHeight: 48
+    ToolbarHeight: 48
+    TouchTarget: 32
+  typography:
+    HeadlineSmall:
+      fontSize: 24
+      fontWeight: Regular
+      fontStyle: Normal
+      fontName: Roboto-Regular
+      characterSpacing: 0
+      lineSpacing: 0
+    TitleLarge:
+      fontSize: 22
+      fontWeight: Regular
+      fontStyle: Normal
+      fontName: Roboto-Regular
+      characterSpacing: 0
+      lineSpacing: 0
+    TitleMedium:
+      fontSize: 16
+      fontWeight: Medium
+      fontStyle: Normal
+      fontName: Roboto-Medium
+      characterSpacing: 0.15
+      lineSpacing: 0
+    BodyMedium:
+      fontSize: 14
+      fontWeight: Regular
+      fontStyle: Normal
+      fontName: Roboto-Regular
+      characterSpacing: 0.25
+      lineSpacing: 0
+    LabelLarge:
+      fontSize: 14
+      fontWeight: Medium
+      fontStyle: Normal
+      fontName: Roboto-Medium
+      characterSpacing: 0.1
+      lineSpacing: 0
+
+nodes:
+  # --- root view -----------------------------------------------------------
+  - id: 9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f
+    kind: ui
+    name: UIDemoMainMenu
+    type: mdu.ui.UIDemoMainMenu
+    siblingIndex: 0
+    active: true
+    isView: true
+    layer: DEFAULT
+    rect: { x: 0, y: 0, width: 1728, height: 1117 }
+    rectLocal: { x: -864, y: -558.5, width: 1728, height: 1117 }
+    anchor: { pivotX: 0.5, pivotY: 0.5, anchorMinX: 0.5, anchorMinY: 0.5, anchorMaxX: 0.5, anchorMaxY: 0.5, anchoredX: 0, anchoredY: 0, sizeX: 1728, sizeY: 1117 }
+    data:
+      subtitle: 'Rendered from a runtime snapshot'
+
+  # --- app bar -------------------------------------------------------------
+  - id: a1000000000000000000000000000001
+    parentId: 9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f
+    kind: ui
+    name: AppBar
+    type: mdu.ui.AppBar
+    siblingIndex: 0
+    active: true
+    rect: { x: 0, y: 0, width: 1728, height: 72 }
+    layout:
+      type: Horizontal
+      paddingLeft: 16
+      paddingRight: 16
+      paddingTop: 12
+      paddingBottom: 12
+      spacing: 8
+      childAlignment: MiddleLeft
+      controlChildWidth: false
+      controlChildHeight: true
+      childForceExpandWidth: false
+      childForceExpandHeight: false
+      reverseArrangement: false
+    resolved:
+      colorRoles: { colorRole: SurfaceContainer }
+      backgroundColor: '#F3EDF7'
+      opacity: 1
+    data:
+      title: Material UI Demo
+      colorRole: SurfaceContainer
+      opacity: 1
+
+  - id: a1000000000000000000000000000002
+    parentId: a1000000000000000000000000000001
+    kind: ui
+    name: Title
+    type: mdu.ui.Text
+    siblingIndex: 0
+    active: true
+    rect: { x: 16, y: 16, width: 320, height: 40 }
+    resolved:
+      text: Material UI Demo
+      textRole: TitleLarge
+      fontSize: 22
+      fontName: Roboto-Regular
+      color: '#1D1B20'
+      colorRoles: { colorRole: OnSurface }
+    data:
+      text: Material UI Demo
+      textRole: TitleLarge
+      colorRole: OnSurface
+      opacity: 1
+
+  - id: a1000000000000000000000000000003
+    parentId: a1000000000000000000000000000001
+    kind: layout
+    name: Spacer
+    type: UnityEngine.RectTransform
+    siblingIndex: 1
+    active: true
+    rect: { x: 344, y: 12, width: 1304, height: 48 }
+
+  - id: a1000000000000000000000000000004
+    parentId: a1000000000000000000000000000001
+    kind: ui
+    name: IconButton
+    type: mdu.ui.Button
+    siblingIndex: 2
+    active: true
+    rect: { x: 1664, y: 12, width: 48, height: 48 }
+    resolved:
+      cornerRadius: 24
+      colorRoles: { labelColorRole: OnSurface, iconColor: OnSurface }
+      opacity: 1
+    data:
+      style: Text
+      shape: Round
+      size: MD
+      showLabel: false
+      showIcon: true
+      icon: { code: 58820, fill: 0 }
+      enabled: true
+
+  # --- content -------------------------------------------------------------
+  - id: b2000000000000000000000000000001
+    parentId: 9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f
+    kind: layout
+    name: Content
+    type: UnityEngine.RectTransform
+    siblingIndex: 1
+    active: true
+    rect: { x: 0, y: 72, width: 1728, height: 1045 }
+    layout:
+      type: Vertical
+      paddingLeft: 32
+      paddingRight: 32
+      paddingTop: 32
+      paddingBottom: 32
+      spacing: 24
+      childAlignment: UpperLeft
+      controlChildWidth: true
+      controlChildHeight: false
+      childForceExpandWidth: false
+      childForceExpandHeight: false
+      reverseArrangement: false
+
+  - id: b2000000000000000000000000000002
+    parentId: b2000000000000000000000000000001
+    kind: ui
+    name: Welcome
+    type: mdu.ui.Text
+    siblingIndex: 0
+    active: true
+    rect: { x: 32, y: 104, width: 700, height: 40 }
+    resolved:
+      text: Welcome back
+      textRole: HeadlineSmall
+      fontSize: 24
+      fontName: Roboto-Regular
+      color: '#1D1B20'
+      colorRoles: { colorRole: OnSurface }
+    data:
+      text: Welcome back
+      textRole: HeadlineSmall
+      colorRole: OnSurface
+      opacity: 1
+
+  - id: b2000000000000000000000000000003
+    parentId: b2000000000000000000000000000001
+    kind: ui
+    name: Subtitle
+    type: mdu.ui.Text
+    siblingIndex: 1
+    active: true
+    rect: { x: 32, y: 168, width: 700, height: 44 }
+    resolved:
+      text: 'Rendered from a runtime YAML snapshot exported by the Unity UI.'
+      textRole: BodyMedium
+      fontSize: 14
+      fontName: Roboto-Regular
+      color: '#49454F'
+      colorRoles: { colorRole: OnSurfaceVariant }
+    data:
+      text: 'Rendered from a runtime YAML snapshot exported by the Unity UI.'
+      textRole: BodyMedium
+      colorRole: OnSurfaceVariant
+      opacity: 1
+
+  # --- card (Surface) ------------------------------------------------------
+  - id: b2000000000000000000000000000004
+    parentId: b2000000000000000000000000000001
+    kind: ui
+    name: Card
+    type: mdu.ui.Surface
+    siblingIndex: 2
+    active: true
+    rect: { x: 32, y: 236, width: 700, height: 200 }
+    layout:
+      type: Vertical
+      paddingLeft: 24
+      paddingRight: 24
+      paddingTop: 24
+      paddingBottom: 24
+      spacing: 16
+      childAlignment: UpperLeft
+      controlChildWidth: true
+      controlChildHeight: false
+      childForceExpandWidth: false
+      childForceExpandHeight: false
+      reverseArrangement: false
+    resolved:
+      colorRoles: { colorRole: SurfaceContainer }
+      backgroundColor: '#F3EDF7'
+      cornerRadius: 16
+      opacity: 1
+    data:
+      colorRole: SurfaceContainer
+      opacity: 1
+
+  - id: b2000000000000000000000000000005
+    parentId: b2000000000000000000000000000004
+    kind: ui
+    name: CardTitle
+    type: mdu.ui.Text
+    siblingIndex: 0
+    active: true
+    rect: { x: 56, y: 260, width: 400, height: 24 }
+    resolved:
+      text: Snapshot card
+      textRole: TitleMedium
+      fontSize: 16
+      fontName: Roboto-Medium
+      color: '#1D1B20'
+      colorRoles: { colorRole: OnSurface }
+    data:
+      text: Snapshot card
+      textRole: TitleMedium
+      colorRole: OnSurface
+      opacity: 1
+
+  - id: b2000000000000000000000000000006
+    parentId: b2000000000000000000000000000004
+    kind: ui
+    name: CardBody
+    type: mdu.ui.Text
+    siblingIndex: 1
+    active: true
+    rect: { x: 56, y: 300, width: 620, height: 64 }
+    resolved:
+      text: 'Spacing, margins and layout groups were captured after an immediate layout rebuild.'
+      textRole: BodyMedium
+      fontSize: 14
+      fontName: Roboto-Regular
+      color: '#49454F'
+      colorRoles: { colorRole: OnSurfaceVariant }
+    data:
+      text: 'Spacing, margins and layout groups were captured after an immediate layout rebuild.'
+      textRole: BodyMedium
+      colorRole: OnSurfaceVariant
+      opacity: 1
+
+  # --- button row ----------------------------------------------------------
+  - id: b2000000000000000000000000000007
+    parentId: b2000000000000000000000000000001
+    kind: layout
+    name: ButtonRow
+    type: UnityEngine.RectTransform
+    siblingIndex: 3
+    active: true
+    rect: { x: 32, y: 460, width: 700, height: 48 }
+    layout:
+      type: Horizontal
+      paddingLeft: 0
+      paddingRight: 0
+      paddingTop: 0
+      paddingBottom: 0
+      spacing: 16
+      childAlignment: MiddleLeft
+      controlChildWidth: false
+      controlChildHeight: true
+      childForceExpandWidth: false
+      childForceExpandHeight: false
+      reverseArrangement: false
+
+  - id: b2000000000000000000000000000008
+    parentId: b2000000000000000000000000000007
+    kind: ui
+    name: PrimaryButton
+    type: mdu.ui.Button
+    siblingIndex: 0
+    active: true
+    rect: { x: 32, y: 460, width: 184, height: 48 }
+    layoutElement: { minWidth: 0, minHeight: 0, preferredWidth: 184, preferredHeight: 48, flexibleWidth: -1, flexibleHeight: -1, ignoreLayout: false }
+    contentSizeFitter: { horizontalMode: PreferredSize, verticalMode: PreferredSize }
+    resolved:
+      cornerRadius: 24
+      opacity: 1
+    data:
+      style: Filled
+      shape: Round
+      size: MD
+      text: Get started
+      showLabel: true
+      showIcon: true
+      iconRight: true
+      icon: { code: 59574, fill: 0 }
+      enabled: true
+
+  - id: b2000000000000000000000000000009
+    parentId: b2000000000000000000000000000007
+    kind: ui
+    name: SkipButton
+    type: mdu.ui.Button
+    siblingIndex: 1
+    active: true
+    rect: { x: 232, y: 460, width: 112, height: 48 }
+    resolved:
+      cornerRadius: 24
+      opacity: 1
+    data:
+      style: Text
+      shape: Round
+      size: MD
+      text: Skip
+      showLabel: true
+      showIcon: false
+      enabled: true
+
+  # --- settings row --------------------------------------------------------
+  - id: b200000000000000000000000000000a
+    parentId: b2000000000000000000000000000001
+    kind: layout
+    name: SettingsRow
+    type: UnityEngine.RectTransform
+    siblingIndex: 4
+    active: true
+    rect: { x: 32, y: 532, width: 700, height: 56 }
+    layout:
+      type: Horizontal
+      paddingLeft: 0
+      paddingRight: 0
+      paddingTop: 0
+      paddingBottom: 0
+      spacing: 16
+      childAlignment: MiddleLeft
+      controlChildWidth: true
+      controlChildHeight: false
+      childForceExpandWidth: false
+      childForceExpandHeight: false
+      reverseArrangement: false
+
+  - id: b200000000000000000000000000000b
+    parentId: b200000000000000000000000000000a
+    kind: ui
+    name: SettingLabel
+    type: mdu.ui.Text
+    siblingIndex: 0
+    active: true
+    rect: { x: 32, y: 548, width: 600, height: 24 }
+    resolved:
+      text: Dark theme
+      textRole: BodyMedium
+      fontSize: 14
+      fontName: Roboto-Regular
+      color: '#1D1B20'
+      colorRoles: { colorRole: OnSurface }
+    data:
+      text: Dark theme
+      textRole: BodyMedium
+      colorRole: OnSurface
+      opacity: 1
+
+  - id: b200000000000000000000000000000c
+    parentId: b200000000000000000000000000000a
+    kind: ui
+    name: DarkSwitch
+    type: mdu.ui.Switch
+    siblingIndex: 1
+    active: true
+    rect: { x: 680, y: 544, width: 52, height: 32 }
+    data:
+      checked: false
+      colorRole: Secondary
+
+  # --- list item (partial) --------------------------------------------------
+  - id: b200000000000000000000000000000d
+    parentId: b2000000000000000000000000000001
+    kind: ui
+    name: RecentItem
+    type: mdu.ui.ListItem
+    siblingIndex: 5
+    active: true
+    rect: { x: 32, y: 612, width: 700, height: 56 }
+    resolved:
+      colorRoles: { colorRole: SurfaceContainer }
+      backgroundColor: '#F3EDF7'
+      cornerRadius: 16
+      opacity: 1
+    data:
+      headline: Snapshot exported
+      supportingText: 'View transition trigger · 42 nodes'
+      colorRole: SurfaceContainer
+      opacity: 1

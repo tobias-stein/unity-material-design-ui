@@ -88,7 +88,9 @@ namespace mdu.ui
             if (_isSticky && _state == ViewState.VISIBLE) { return UniTask.CompletedTask; }
 
             gameObject.SetActive(true);
-            UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(rectTransform);
+            // LayoutRebuilder.ForceRebuildLayoutImmediate on a view root is a no-op
+            // (no ILayoutController on it), so flush canvas queues + rebuild real roots.
+            UILayout.forceNow(rectTransform);
 
             _state = ViewState.VISIBLE;
             UnityEngine.Debug.Log($"{this} shown.");
