@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using mdu.ui.telemetry.events;
 using mdu.ui.telemetry.snapshot;
 
 namespace mdu.ui.telemetry
@@ -13,6 +14,7 @@ namespace mdu.ui.telemetry
         private static TelemetryConfig _config;
         private static TelemetryHost _host;
         private static UISnapshotTriggers _snapshotTriggers;
+        private static EventCollector _eventCollector;
 
         /// <summary>
         /// Effective configuration. Lazily loaded from Resources/Settings/TelemetrySettings
@@ -34,6 +36,25 @@ namespace mdu.ui.telemetry
 
         /// <summary> Live snapshot trigger feature (null before bootstrap). </summary>
         public static UISnapshotTriggers snapshotTriggers => _snapshotTriggers;
+
+        /// <summary> Live event collector feature (null before bootstrap). </summary>
+        public static EventCollector events => _eventCollector;
+
+        /// <summary>
+        /// Id of the current telemetry session. Generated when telemetry
+        /// bootstraps and replaced by <see cref="newSession"/>. Null before bootstrap.
+        /// Every exported event (and snapshot app info) carries this id.
+        /// </summary>
+        public static string sessionId => _eventCollector?.sessionId;
+
+        /// <summary>
+        /// Ends the current session, flushes its events to disk and starts a
+        /// new session id. Safe to call at any time at runtime.
+        /// </summary>
+        public static void newSession()
+        {
+            _eventCollector?.newSession();
+        }
 
         /// <summary>
         /// Mutates the effective configuration (merged over asset/defaults).
@@ -64,6 +85,7 @@ namespace mdu.ui.telemetry
             }
 
             _snapshotTriggers = new UISnapshotTriggers();
+            _eventCollector = new EventCollector();
 
             var go = new GameObject("[Telemetry]");
             UnityEngine.Object.DontDestroyOnLoad(go);
@@ -79,6 +101,15 @@ namespace mdu.ui.telemetry
             catch (Exception ex)
             {
                 // A broken feature must never take down the host (or the app).
+                Debug.LogException(ex);
+            }
+
+            try
+            {
+                _eventCollector?.tick();
+            }
+            catch (Exception ex)
+            {
                 Debug.LogException(ex);
             }
         }

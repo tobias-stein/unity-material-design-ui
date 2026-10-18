@@ -1,7 +1,7 @@
 # Snapshot Viewer
 
 Standalone HTML renderer for UI snapshots exported at runtime by
-`Assets/Runtime/Telemetry/` (schemaVersion 1). Renders with Material 3 tokens —
+`Assets/Runtime/Telemetry/` (schemaVersion 2). Renders with Material 3 tokens —
 no build step, no framework.
 
 ## Run
@@ -49,12 +49,13 @@ Triggers (configurable via `Resources/Settings/TelemetrySettings` asset or
 - **view transitions** — auto-capture after `pushAsync`/`popAsync` completes
   (rate-limited, deduped, retention-pruned)
 
-## Schema (v1)
+## Schema (v2)
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 timestampUtc: ISO-8601
-app:      { productName, unityVersion, platform, deviceType, screenWidth, screenHeight, scaleFactor }
+app:      { productName, unityVersion, platform, deviceType, sessionId, screenWidth, screenHeight, scaleFactor }
+           # sessionId = telemetry session id (v2, correlates with event files)
 view:     { id, name, type, layer }              # captured root view
 theme:    { seedColor, isDark, deviceType,
             palette: { ColorRole -> '#RRGGBB[AA]' }, # resolved Material 3 roles
@@ -100,6 +101,56 @@ nodes:    # flat list, parents before children
 The viewer derives hierarchy from `parentId` + `siblingsIndex`, so snapshots
 stay renderable even if optional fields are missing. Newer `schemaVersion`
 values render best-effort with a warning.
+
+## Event timeline (InfluxDB line protocol)
+
+Besides snapshots, telemetry records interaction/view-dwell events as
+**InfluxDB line protocol** points. Every point carries the `session` tag
+(same id as `app.sessionId` in the snapshots), plus `type`,
+`view`/`view_id` and — for element interactions — `element`/`element_type` tags:
+
+```
+session,type=start session=<sid> value=1i <ns>
+ui_event,type=view_open,session=<sid>,view=<View>,view_id=<guid> value=1i <ns>
+ui_event,type=click,session=<sid>,view=<View>,view_id=<guid>,element=<guid>,element_type=mdu.ui.Button value=1i <ns>
+ui_event,type=toggle,…,element=<guid>,element_type=mdu.ui.Switch value=1i,on=true <ns>
+ui_event,type=view_close,session=<sid>,view=<View>,view_id=<guid> value=1i,dwell=12.48 <ns>
+session,type=end session=<sid> value=1i <ns>
+```
+
+- Event types: `click`, `toggle` (`on=` new state), `close`,
+  `backdrop_click`, `view_open`, `view_close` (`dwell=` seconds open).
+- A session starts at Unity launch and whenever `Telemetry.newSession()` is
+  called (the old session is flushed and closed with `session,type=end` first).
+
+### Delivery modes (`TelemetryConfig` → "InfluxDB" section)
+
+**`influxEnabled = true` (default) — write-ahead outbox:**
+
+1. Events batch in memory, then persist to `…/Telemetry/events/pending-<timestamp>.lp`
+   **before** the first send attempt (nothing is ever lost to a dead server),
+2. the file is POSTed to the InfluxDB v2 HTTP API
+   (`/api/v2/write?org=…&bucket=…&precision=ns`) and **deleted on 204**,
+3. failures keep the file on disk; retries back off up to 60 s, and files from
+   a previous run are re-sent on startup — the queue drains automatically when
+   InfluxDB comes back,
+4. `eventsMaxFiles` prunes the oldest pending files as a safety cap.
+
+So under normal operation `Telemetry/events/` stays empty — files only exist
+while InfluxDB is unreachable. Run the local dev instance with:
+
+```sh
+cd Extra/Infrastructure
+docker compose up -d   # UI: http://localhost:8086 (admin/adminadmin), org=mdu, bucket=ui
+```
+
+The compose file's org/bucket/token must match the `TelemetryConfig` InfluxDB
+defaults (both files document this).
+
+**`influxEnabled = false` — file archive:** events append to
+`…/Telemetry/events/session-<sessionId>.lp` (one file per session,
+retention-pruned), e.g. for offline inspection or a manual
+`influxd write -b ui telemetry/events/session-*.lp`.
 
 ## Text rendering
 

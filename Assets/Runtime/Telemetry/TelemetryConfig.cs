@@ -57,5 +57,30 @@ namespace mdu.ui.telemetry
         public bool forceRebuildLayout = true;
         [Tooltip("Skip pooled (inactive, recycled) UI elements and their subtrees.")]
         public bool skipPooled = true;
+
+        [Header("Events (InfluxDB line protocol)")]
+        [Tooltip("Record UI interaction and view dwell events with the session id.")]
+        public bool eventsEnabled = true;
+        [Tooltip("Subfolder under the base directory for event files (session-<id>.lp / pending-*.lp).")]
+        public string eventsSubfolder = "Telemetry/events";
+        [Tooltip("Flush the event buffer once this many events are pending.")]
+        public int eventFlushCount = 64;
+        [Tooltip("Flush the event buffer after this many seconds.")]
+        public float eventFlushInterval = 5f;
+        [Tooltip("Delete oldest event files beyond this many (0 = unlimited). Safety cap for undelivered pending files.")]
+        public int eventsMaxFiles = 100;
+
+        [Header("InfluxDB (v2 HTTP API)")]
+        [Tooltip("Deliver events to InfluxDB as a write-ahead outbox: persisted to pending-*.lp first, " +
+                 "file deleted on 204. When off, events are archived to session-<id>.lp files instead. " +
+                 "url/org/bucket/token must match Extra/Infrastructure/docker-compose.yml.")]
+        public bool influxEnabled = true;
+        public string influxUrl = "http://localhost:8086";
+        public string influxOrg = "mdu";
+        public string influxBucket = "ui";
+        [Tooltip("Local dev token from the compose file — never put a production token here for shipping builds.")]
+        public string influxToken = "mdu-local-dev-token-0123456789abcdef";
+        [Tooltip("HTTP timeout per write attempt, in seconds.")]
+        public float influxTimeoutSeconds = 10f;
     }
 }

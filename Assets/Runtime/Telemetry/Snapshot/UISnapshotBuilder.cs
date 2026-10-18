@@ -71,6 +71,7 @@ namespace mdu.ui.telemetry.snapshot
                 unityVersion = Application.unityVersion,
                 platform = Application.platform.ToString(),
                 deviceType = settings != null ? settings.CurrentDeviceType.ToString() : null,
+                sessionId = Telemetry.sessionId,
                 screenWidth = round(Screen.width),
                 screenHeight = round(Screen.height),
                 scaleFactor = round(canvas != null ? canvas.scaleFactor : 1f)

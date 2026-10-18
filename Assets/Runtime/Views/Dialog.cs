@@ -75,6 +75,7 @@ namespace mdu
 
         public override void close()
         {
+            UIInteractions.close(this);
             Dispose();
         }
         

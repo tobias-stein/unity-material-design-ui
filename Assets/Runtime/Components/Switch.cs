@@ -114,7 +114,9 @@ namespace mdu.ui
             }
             else
             {
-                binder.updateField(data => data.isOn, !binder.data.isOn);
+                var newValue = !binder.data.isOn;
+                UIInteractions.toggle(this, newValue);
+                binder.updateField(data => data.isOn, newValue);
             }
         }
 

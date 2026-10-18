@@ -158,7 +158,12 @@ namespace mdu.ui
 
             if (binder.data.closable && RectTransformUtility.RectangleContainsScreenPoint(_close.rectTransform, eventData.position, eventData.pressEventCamera))
             {
+                UIInteractions.close(this);
                 binder.data.onClose?.Invoke();
+            }
+            else
+            {
+                UIInteractions.click(this);
             }
         }
 

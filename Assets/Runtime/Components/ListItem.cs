@@ -138,6 +138,7 @@ namespace mdu.ui
             binder.bind(data => data.onClick, value =>
             {
                 _button.onClick.RemoveAllListeners();
+                _button.onClick.AddListener(() => UIInteractions.click(this));
                 if (value != null)
                 {
                     _button.onClick.AddListener(() => value.Invoke(this));

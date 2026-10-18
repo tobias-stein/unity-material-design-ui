@@ -1,0 +1,38 @@
+# InfluxDB v2 for Unity-MaterialDesign-UI telemetry.
+#
+#   docker compose up -d      # start  (UI: http://localhost:8086, user: admin / adminadmin)
+#   docker compose down       # stop   (data survives in the named volumes)
+#
+# The org / bucket / token below MUST match the defaults in
+# Assets/Runtime/Telemetry/TelemetryConfig.cs ("InfluxDB" section):
+#   url    = http://localhost:8086
+#   org    = mdu
+#   bucket = ui
+#   token  = mdu-local-dev-token-0123456789abcdef
+#
+# This token is a *local development* token baked into a compose file and a
+# Unity config default — never reuse it anywhere real, and don't ship a
+# TelemetrySettings asset containing a production token in a build.
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: mdu-ui-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminadmin
+      DOCKER_INFLUXDB_INIT_ORG: mdu
+      DOCKER_INFLUXDB_INIT_BUCKET: ui
+      DOCKER_INFLUXDB_INIT_RETENTION: 0s # keep everything (dev)
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: mdu-local-dev-token-0123456789abcdef
+    volumes:
+      - influxdb2-data:/var/lib/influxdb2
+      - influxdb2-config:/etc/influxdb2
+
+volumes:
+  influxdb2-data:
+  influxdb2-config:

@@ -162,6 +162,7 @@ namespace mdu.ui
             binder.bind(data => data.onClick, value =>
             {
                 var onClick = new UnityEngine.UI.Button.ButtonClickedEvent();
+                onClick.AddListener(() => UIInteractions.click(this));
                 onClick.AddListener(() => value?.Invoke());
                 _button.onClick = onClick;
             });

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 namespace mdu.ui.telemetry.snapshot
 {
     /// <summary>
-    /// Serialized UI snapshot ("schema v1"). Pure POCO data: primitives, enums as
-    /// strings, nested POCOs and dictionaries — nothing Unity-serializable-specific
-    /// crosses the YAML boundary.
+    /// Serialized UI snapshot ("schema v2": adds <see cref="SnapshotAppInfo.sessionId"/>).
+    /// Pure POCO data: primitives, enums as strings, nested POCOs and dictionaries —
+    /// nothing Unity-serializable-specific crosses the YAML boundary.
     ///
     /// Coordinate convention: <see cref="SnapshotRect"/> values for <c>rect</c> are
     /// root-view space with a top-left origin (y grows downward, HTML-style).
@@ -13,7 +13,7 @@ namespace mdu.ui.telemetry.snapshot
     /// </summary>
     public class UISnapshot
     {
-        public const int SCHEMA_VERSION = 1;
+        public const int SCHEMA_VERSION = 2;
 
         public int schemaVersion;
         public string timestampUtc;
@@ -30,6 +30,14 @@ namespace mdu.ui.telemetry.snapshot
         public string unityVersion;
         public string platform;
         public string deviceType;
+
+        /// <summary>
+        /// Telemetry session id this snapshot belongs to (same id as every
+        /// exported event's "session" tag) — correlates snapshots with the
+        /// event timeline. Null when telemetry is not bootstrapped.
+        /// </summary>
+        public string sessionId;
+
         public float screenWidth;
         public float screenHeight;
         public float scaleFactor;

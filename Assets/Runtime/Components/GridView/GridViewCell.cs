@@ -62,7 +62,11 @@ namespace mdu.ui
             base.Dispose();
         }
 
-        public void OnPointerClick(PointerEventData eventData) => onCellClicked?.Invoke();
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            UIInteractions.click(this);
+            onCellClicked?.Invoke();
+        }
 
         public void setContent(IUIComponent content)
         {

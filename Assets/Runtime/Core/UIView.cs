@@ -115,6 +115,7 @@ namespace mdu.ui
 
         public virtual void close()
         {
+            UIInteractions.close(this);
             onClose?.Invoke(this);
         }
 

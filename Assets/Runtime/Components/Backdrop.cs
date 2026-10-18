@@ -52,6 +52,9 @@ namespace mdu.ui
 
         public void OnPointerClick(PointerEventData eventData)
         {
+            // Backdrop is a plain MonoBehaviour without an IUI id — correlate
+            // with the owning UI element/view if there is one.
+            UIInteractions.backdropClick(GetComponentInParent<IUI>());
             onClick?.Invoke();
         }
     }
