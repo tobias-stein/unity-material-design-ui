@@ -21,7 +21,7 @@
  *   geometry warnings surface right below the header, as in the standalone
  *   viewer.
  */
-import { api, ApiClientError, type ParsedSnapshotDto, type TimelineResponse } from "../api.js";
+import { api, ApiClientError, type ParsedSnapshotDto, type SnapshotResponse, type TimelineResponse } from "../api.js";
 import {
   buildReplicaStage,
   computeMiniMap,
@@ -199,8 +199,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     if (minimapInFlight >= MINIMAP_CONCURRENCY) return;
     if (minimaps.has(anchorIndex) || minimapFailed.has(anchorIndex)) return;
     minimapInFlight++;
-    api
-      .snapshot(sessionId, String(anchorIndex))
+    snapshotFor(anchorIndex)
       .then((response) => minimaps.set(anchorIndex, computeMiniMap(asUISnapshot(response.parsed))))
       .catch(() => minimapFailed.add(anchorIndex))
       .finally(() => {
@@ -217,6 +216,19 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
 
   /* ---------------------------------------------------------- replica sync */
+
+  /** One fetch per anchor index, shared by replica + filmstrip (coalesced). */
+  const snapshotFetches = new Map<number, Promise<SnapshotResponse>>();
+  function snapshotFor(index: number): Promise<SnapshotResponse> {
+    let pending = snapshotFetches.get(index);
+    if (pending === undefined) {
+      pending = api.snapshot(sessionId, String(index));
+      snapshotFetches.set(index, pending);
+      // Failures are not memoized: a later scrub may retry (store swap etc.).
+      pending.catch(() => snapshotFetches.delete(index));
+    }
+    return pending;
+  }
 
   const replicaCache = new Map<number, Promise<ReplicaEntry>>();
   let renderedAnchor = -1;
@@ -243,8 +255,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   function replicaFor(index: number): Promise<ReplicaEntry> {
     let entry = replicaCache.get(index);
     if (entry === undefined) {
-      entry = api
-        .snapshot(sessionId, String(index))
+      entry = snapshotFor(index)
         .then((response) => ({ index, parsed: response.parsed, error: null }))
         .catch((error) => ({
           index,

@@ -17,6 +17,8 @@ export interface ToolConfig {
   lpRoot: string | null;
   /** Local snapshot storage root (kept for later phases; surfaces in /sources). */
   snapshotRoot: string | null;
+  /** TTL cache for `/api/aggregate` responses (0 disables; requests coalesce). */
+  aggregateCacheMs: number;
   /** Absolute path of the built web client (served statically). */
   webDist: string | null;
   port: number;
@@ -49,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ToolConfig {
     },
     lpRoot: nullIfEmpty(env.LP_ROOT),
     snapshotRoot: nullIfEmpty(env.SNAPSHOT_ROOT),
+    aggregateCacheMs: nonNegativeInt(env.AGGREGATE_CACHE_MS) ?? 15_000,
     webDist,
     port: positiveInt(env.PORT) ?? 8087,
     host: env.HOST?.trim() || "0.0.0.0",
@@ -64,4 +67,10 @@ function positiveInt(value: string | undefined): number | null {
   if (!value) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function nonNegativeInt(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }

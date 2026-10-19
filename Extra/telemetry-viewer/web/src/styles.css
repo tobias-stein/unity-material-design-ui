@@ -582,3 +582,38 @@ body.aggregate-open .layout { max-width: 1400px; }
   border-style: dashed;
 }
 .agg-row.static:hover { border-color: #444e5c; }
+
+/* -------------------------------------------------- sources panel (P6) */
+
+.sources-panel {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sources-panel.hidden { display: none; }
+.sources-panel h2 { margin: 0; font-size: 13px; letter-spacing: 0.4px; }
+.sources-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: end;
+}
+.sources-grid .switch { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.sources-grid .switch input[type="checkbox"] { accent-color: var(--primary); }
+.sources-grid .field.grow { flex: 1 1 320px; min-width: 280px; }
+.sources-panel .row { display: flex; gap: 6px; align-items: center; }
+.sources-panel .row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: #0d1017;
+  border: 1px solid #242a35;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.sources-panel input[type="file"] { color: var(--text-dim); font-size: 12px; }
+.sources-panel .hint.error { color: var(--err); }
+.sources-panel input:focus-visible { outline: 1px solid var(--primary); }

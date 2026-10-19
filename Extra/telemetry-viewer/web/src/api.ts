@@ -69,8 +69,12 @@ export class ApiClientError extends Error {
   }
 }
 
-async function request<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { accept: "application/json" } });
+async function request<T>(url: string, init: { method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; payload?: unknown } = {}): Promise<T> {
+  const response = await fetch(url, {
+    headers: { accept: "application/json" },
+    method: init.method ?? "GET",
+    ...(init.payload === undefined ? {} : { body: JSON.stringify(init.payload) }),
+  });
   const text = await response.text();
   let parsed: unknown = null;
   try {
@@ -218,11 +222,72 @@ export const api = {
     request(`/api/snapshots/${encodeURIComponent(id)}/${encodeURIComponent(ref)}`),
   aggregate: (query: AggregateQuery): Promise<AggregateResponse> =>
     request(`/api/aggregate${aggregateParams(query)}`),
+  sourcesConfig: (): Promise<SourcesConfigResponse> => request("/api/sources/config"),
+  patchSourcesConfig: (patch: SourcesConfigPatch): Promise<SourcesConfigPatchResponse> =>
+    request("/api/sources/config", { method: "PATCH", payload: patch }),
+  rescanSources: (): Promise<SourcesRescanResponse> => request("/api/sources/rescan", { method: "POST" }),
+  putImportedFiles: (files: Array<{ name: string; content: string }>): Promise<ImportedUniverseResponse> =>
+    request("/api/sources/imported", { method: "PUT", payload: { files } }),
+  clearImportedFiles: (): Promise<ImportedClearedResponse> =>
+    request("/api/sources/imported", { method: "DELETE" }),
 };
+
+/* ------------------------------------------------- source config (P6) */
 
 /** URL (+urlencoded query) for the CSV export button's download link. */
 export function aggregateCsvUrl(query: AggregateQuery): string {
   return `/api/aggregate/export.csv${aggregateParams(query)}`;
+}
+
+export interface EffectiveRootDto {
+  env: string | null;
+  override?: string | null;
+  root: string | null;
+}
+
+export interface SourcesConfigResponse {
+  pinned: boolean;
+  influx: { enabled: boolean; url: string; org: string; bucket: string };
+  lpRoot: EffectiveRootDto;
+  snapshotRoot: EffectiveRootDto;
+  universe: {
+    mode: "all" | "imported";
+    files: Array<{ name: string; bytes: number }>;
+    events: number;
+    sessions: string[];
+    malformedLines: number;
+  };
+}
+
+export interface SourcesConfigPatch {
+  influxEnabled?: boolean;
+  lpRoot?: string | null;
+  snapshotRoot?: string | null;
+}
+
+export interface SourcesConfigPatchResponse {
+  applied: string[];
+  config: SourcesConfigResponse;
+}
+
+export interface SourcesRescanResponse {
+  rescan: "ok";
+  sources: SourcesResponse;
+}
+
+export interface ImportedUniverseResponse {
+  universe: "imported";
+  files: Array<{ name: string; bytes: number }>;
+  events: number;
+  malformedLines: number;
+  sessions: string[];
+  config: SourcesConfigResponse;
+}
+
+export interface ImportedClearedResponse {
+  universe: "all";
+  cleared: boolean;
+  config: SourcesConfigResponse;
 }
 
 function aggregateParams(query: AggregateQuery): string {

@@ -20,6 +20,9 @@ services:
   telemetry-viewer:
     # Real tool (from P1 on, plan ui-telemetry-viewer.md §11/P1): Fastify API +
     # static web client on one port. Strictly read-only toward InfluxDB.
+    # P6: the web UI's "Sources" panel can switch influx⇄directory-only mode,
+    # override LP_ROOT/SNAPSHOT_ROOT, re-scan and import .lp files at runtime —
+    # no container restart needed; the env vars below remain the defaults.
     build: ../telemetry-viewer
     image: mdu/telemetry-viewer:latest
     container_name: mdu-ui-telemetry-viewer

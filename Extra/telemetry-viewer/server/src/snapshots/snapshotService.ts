@@ -36,9 +36,22 @@ export class SnapshotService {
   private readonly cache: Map<string, ParsedSnapshot> = new Map();
 
   constructor(
-    private readonly store: SnapshotStore,
+    private store: SnapshotStore,
     private readonly cacheEntries: number = DEFAULT_CACHE_ENTRIES,
   ) {}
+
+  /** Runtime root reconfiguration (P6): the store instance may be swapped. */
+  setStore(store: SnapshotStore): void {
+    this.store = store;
+    // The parse LRU is content-addressed (keyed by sha256), so it stays
+    // valid across root swaps — but a fresh root must not hold a stale
+    // unconfigured/unreachable state either; clearing is cheap and honest.
+    this.clearCache();
+  }
+
+  clearCache(): void {
+    this.cache.clear();
+  }
 
   /**
    * Resolve + parse a ledger entry. `buffer` allows clients to pass opacity;

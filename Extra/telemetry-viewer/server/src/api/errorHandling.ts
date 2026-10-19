@@ -10,7 +10,7 @@ export class ApiError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly httpStatus: 400 | 404 | 409 | 500 | 502 | 503 = 400,
+    readonly httpStatus: 400 | 404 | 409 | 413 | 500 | 502 | 503 = 400,
     readonly detail?: string,
   ) {
     super(message);
@@ -33,8 +33,8 @@ export function registerErrorHandlers(app: FastifyInstance, notFound: NotFoundOp
       reply.status(400).send(errorBody("INVALID_QUERY", "Invalid query parameters."));
       return;
     }
-    const status: 400 | 404 | 409 | 500 | 502 | 503 =
-      typeof err.httpStatus === "number" && [400, 404, 409, 502, 503].includes(err.httpStatus)
+    const status: 400 | 404 | 409 | 413 | 500 | 502 | 503 =
+      typeof err.httpStatus === "number" && [400, 404, 409, 413, 502, 503].includes(err.httpStatus)
         ? (err.httpStatus as 400 | 404 | 409 | 502 | 503)
         : 500;
     request.log.error({ err: error, code: err.code }, "request failed");

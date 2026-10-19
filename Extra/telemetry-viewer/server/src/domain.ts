@@ -71,7 +71,7 @@ export interface SourceError {
   detail?: string;
 }
 
-export type SourceId = "influx" | "lp-files";
+export type SourceId = "influx" | "lp-files" | "imported-files";
 
 export interface SourceStatus {
   id: SourceId;

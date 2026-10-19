@@ -233,6 +233,73 @@ attribution, never re-parsed or inferred), and the modes slice that table.
   per-mode CSV.
 
 
+## What ships in P6 (polish + docs)
+
+**Runtime source configuration — switch sources without a restart.**
+The *Sources ⚙* panel on the sessions view (and the REST surface below it)
+reconfigures the running server in place:
+
+- **InfluxDB ⇄ directory-only mode**: `influxEnabled` flips with one
+  toggle/`PATCH`; the provider list (and the `/api/sources` pills) update on
+  the same connection — new requests see the new universe immediately
+  (budget identities aside, cached catalogs invalidate with every change).
+- **`.lp` root / snapshot root overrides**: a runtime directory points the
+  `lp-files` source or the snapshot store at another root for the session;
+  the `LP_ROOT`/`SNAPSHOT_ROOT` env values stay the *defaults* (shown as such
+  in the panel) and a "Reset" clears the override. Root paths are validated
+  (must exist and be a directory) with a 400 `INVALID_CONFIG` otherwise, and
+  patches apply **all-or-nothing** — a bad `snapshotRoot` never half-applies
+  a good `lpRoot`.
+- **Re-scan** forces the next request to rebuild the session catalog from
+  disk/Influx even with a hot cache (useful after dropping new `session-*.lp`
+  files into the directory).
+- Routes (uniform error envelope; the Influx token is never echoed):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/sources/config` | Effective runtime config (env vs override, universe mode, `pinned` flag) |
+| `PATCH` | `/api/sources/config` | `{ influxEnabled?, lpRoot?, snapshotRoot? }` — validate-then-apply without restart |
+| `POST` | `/api/sources/rescan` | Drop caches; returns the fresh `/api/sources` payload |
+| `PUT` | `/api/sources/imported` | Activate the imported-files universe `{ files: [{ name, content }] }` |
+| `DELETE` | `/api/sources/imported` | Clear the universe — back to all configured sources |
+
+**Imported `.lp` files — the explicit multi-file pick (§3.10).** The panel's
+file input picks any number of `.lp` files (up to 200, total ≤ 32 MiB); the
+client posts their *contents* and — while the import is active — those files
+alone define the temporary session universe: auto-scan and InfluxDB are
+bypassed, never merged. The import lives in tool process memory only
+(strictly read-only on disk; nothing persisted). An imported session's
+timeline works end to end (`origin: imported-files`), and a re-scan is
+refused with 409 `UNIVERSE_READ_ONLY` while the universe is active (imported
+files don't change on disk). New error codes: `IMPORT_EMPTY`,
+`IMPORT_TOO_MANY`, `IMPORT_TOO_LARGE` (413), `IMPORT_INVALID_FILE`,
+`IMPORT_PARSE_FAILED`.
+
+**Performance pass (big sessions + months-long aggregeates).**
+
+- **Request coalescing**: identical in-flight `/api/aggregate` requests share
+  one build — a burst of tabs/scrubs costs one upstream pass (unit-tested
+  with a slow provider: two concurrent requests → one `fetchEvents`).
+- **TTL response cache**: aggregate payloads are cached (`AGGREGATE_CACHE_MS`,
+  default 15 s, `0` disables) *and* invalidated on every runtime source bump
+  (config patch, import, rescan) — a mutation never serves a stale heatmap.
+- **Client snapshot fetch coalescing**: on the session timeline, the replica
+  panel and the filmstrip share one in-flight fetch per anchor index
+  (`snapshotFor`) — scrubbing across captures no longer double-requests.
+- **Perf gate script**: `node scripts/perf-check.mjs` boots the real server
+  on a synthetic 5k-event session and enforces the §14 thresholds. On the
+  dev rig (M-series MacBook, file source): sessions list p95 ≈ 1 ms,
+  session meta p95 < 1.2 ms (< 50 ms budget), timeline DTO (5k events) ≈
+  15 ms, aggregate over a 500-year range ≈ 4 ms (< 3 s budget). The
+  aggregate-over-Influx number rides the same server code path plus the
+  Influx query time, and *first cold* runs pay the Flux round-trip — the
+  coalesced cache turns repeat visits into sub-ms responses. The script also
+  verifies the meta owner/platform arrive from `ui_snapshot_taken` fields
+  with **zero snapshot YAML reads** (unit-locked with a parser spy since P1).
+- Big-session rendering itself is unchanged from P2 (per-pixel density bars,
+  lazy bounded-concurrency filmstrip; `make-big-session-lp.mjs` for the
+  `--anchors 0` unresolved-lane stress).
+
 ## Env vars (server)
 
 | Var | Default | Meaning |
@@ -241,8 +308,9 @@ attribution, never re-parsed or inferred), and the modes slice that table.
 | `INFLUX_ORG` / `INFLUX_BUCKET` | `mdu` / `ui` | Target org/bucket (read-only) |
 | `INFLUX_TOKEN` | local dev token | Bearer token for `/api/v2/query`. Baked compose/dev default only — override in any non-dev setup. Never shipped to the web bundle. |
 | `INFLUX_TIMEOUT_MS` | `10000` | Query/health timeout |
-| `LP_ROOT` | — | Directory auto-scanned for `*.lp` session files (file source; mount read-only in compose) |
-| `SNAPSHOT_ROOT` | — | Snapshot storage root; surfaced in `/api/sources` and resolved by `/api/snapshots/:sessionId/:ref` since P2 (store probe → honest 503/404; mount read-only in compose) |
+| `LP_ROOT` | — | Directory auto-scanned for `*.lp` session files (file source; mount read-only in compose). Runtime-overridable via `PATCH /api/sources/config` (env value remains the default). |
+| `SNAPSHOT_ROOT` | — | Snapshot storage root; surfaced in `/api/sources` and resolved by `/api/snapshots/:sessionId/:ref` since P2 (store probe → honest 503/404; mount read-only in compose). Runtime-overridable via `PATCH /api/sources/config`. |
+| `AGGREGATE_CACHE_MS` | `15000` | TTL cache for aggregate payloads + request coalescing (P6). `0` disables caching (coalescing stays on). Cache invalidates on every source-config/import/rescan change. |
 | `PORT` / `HOST` | `8087` / `0.0.0.0` | Server bind |
 | `WEB_DIST` | `<repo>/web/dist` | Where the built client lives (served statically with SPA fallback) |
 
@@ -270,8 +338,9 @@ tests run against (`./scripts/export-fixtures.sh` regenerates):
 
 ```bash
 cd Extra/telemetry-viewer
-corepack pnpm --filter @mdu/telemetry-viewer-server test     # 111 tests
+corepack pnpm --filter @mdu/telemetry-viewer-server test     # 126 tests
 corepack pnpm test                                          # whole workspace (server + shared package)
+node scripts/perf-check.mjs                                 # P6 perf gates (boots its own server; pass = exit 0)
 ```
 
 P5 adds the shared package's own suite (`corepack pnpm --filter
@@ -287,6 +356,15 @@ P2 adds `timeline.spec.ts` (correlation "latest ≤ t", unresolved-never-dropped
 event-count invariance, dwell spans, synthetic 5k frame) and
 `snapshots.spec.ts` (gz sniffing, geometry-warning parity with the standalone
 viewer, id normalization, `SnapshotService` store probing + LRU).
+
+P6 adds `sourceConfig.spec.ts` (env defaults, no-restart influx⇄directory
+switch, override + reset semantics, all-or-nothing patch validation,
+snapshot-store swap, rescan making new `.lp` files visible over a hot cache,
+`PROVIDERS_PINNED` honesty), `importedUniverse.spec.ts` (three explicit files
+alone define the universe; rejection table for invalid imports; 413-cap;
+clear-restores), and `cache.spec.ts` (coalescing single-build, TTL reuse,
+rescan bust, per-query keying). The perf gate itself is
+`scripts/perf-check.mjs` (documented above).
 
 P3 adds `canonical.spec.ts` (path rules, exact/approximate grading,
 `(Clone)` stripping, root-only elements), `fingerprint.spec.ts`
@@ -380,13 +458,16 @@ Run these in the Unity editor; the config toggles live on `TelemetryConfig`
 
 ## Roadmap
 
-Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — P0 (ledger +
-fixtures), P1 (tool skeleton, Influx source, session list), P2 (single-session
-timeline + snapshot replays), P3 (aggregate mode A heatmaps), P4 (version
-modes B/C — fingerprint group tabs, ground-truth merge) and P5 (the
-standalone `Extra/snapshot-viewer` now runs on the shared
-`@mdu/snapshot-render` package; parity locked) are done; next up P6 (polish:
-config UI, big-session perf pass, docs).
+Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — all seven
+phases are shipped: P0 (ledger + fixtures), P1 (tool skeleton, Influx
+source, session list), P2 (single-session timeline + snapshot replays), P3
+(aggregate mode A heatmaps), P4 (version modes B/C — fingerprint group tabs,
+ground-truth merge), P5 (the standalone `Extra/snapshot-viewer` now runs on
+the shared `@mdu/snapshot-render` package; parity locked) and P6 (runtime
+source config, imported-files universe, cache/coalescing perf pass, docs +
+perf gate). Everything under plan §13 remains future roadmap: S3-compatible
+`SnapshotStore` adapters, multi-bucket/org sources, snapshot upload paths,
+ghost-overlay diff rendering inside mode C and element-lifecycle lines.
 
 > **P3 live-data note:** the two committed demo replays (and their live
 > InfluxDB counterparts) were captured *before* the P0 runtime change, so

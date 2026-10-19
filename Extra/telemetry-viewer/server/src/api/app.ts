@@ -18,8 +18,8 @@ import {
   type SnapshotLoader,
 } from "../core/heatmap.js";
 import { AggregateGroupError } from "../core/versioning.js";
-import { FluxInfluxSource } from "../sources/influx.js";
-import { LpFileListSource } from "../sources/lpFiles.js";
+import { SourceRuntime } from "../sources/runtime.js";
+import { registerSourceRoutes } from "./sourcesConfig.js";
 import { LocalFsSnapshotStore } from "../storage/snapshotStore.js";
 import { SnapshotService, SnapshotResolutionError } from "../snapshots/snapshotService.js";
 import type { ParsedSnapshot } from "../snapshots/parse.js";
@@ -100,6 +100,8 @@ export interface AppOptions {
   providers?: () => SourceProvider[];
   /** Cache lifetime for the session catalog (ms). */
   catalogCacheMs?: number;
+  /** TTL cache for aggregate responses (0 disables; default from config). */
+  aggregateCacheMs?: number;
 }
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
@@ -109,11 +111,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     bodyLimit: 1 << 20,
   });
 
-  const providers = options.providers ?? defaultProviders(config);
-  const snapshotStore = new LocalFsSnapshotStore(config.snapshotRoot);
+  const runtime = new SourceRuntime(config, options.providers !== undefined);
+  const providers = options.providers ?? (() => runtime.providers());
+  let snapshotStore = new LocalFsSnapshotStore(runtime.snapshotRoot.root);
   const snapshotService = new SnapshotService(snapshotStore);
   const cacheMs = options.catalogCacheMs ?? 5_000;
+  const aggregateCacheMs = options.aggregateCacheMs ?? config.aggregateCacheMs;
   const spaIndexFile = await resolveSpaIndex(app, config);
+
+  /* ------------------------------------------------------- catalog + caches */
 
   let cachedCatalog: { at: number; promise: Promise<SessionCatalog> } | null = null;
   const catalog = (): Promise<SessionCatalog> => {
@@ -129,17 +135,77 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     return promise;
   };
 
+  /** Sorting-agnostic canonical description of an aggregate query (cache key). */
+  function aggregateKey(query: AggregateQuery): string {
+    const sorted = [...query.sessions].sort();
+    return JSON.stringify({
+      sessions: sorted,
+      fromMs: query.fromMs ?? null,
+      toMs: query.toMs ?? null,
+      mode: query.mode,
+      group: query.group,
+    });
+  }
+
+  /** TTL + in-flight coalescing cache for aggregate payloads (P6 perf pass). */
+  let aggregateCache: Map<string, { at: number; payload: AggregateRun }> = new Map();
+  let aggregateInFlight: Map<string, Promise<AggregateRun>> = new Map();
+  const aggregateResolve = (key: string): Promise<AggregateRun> | undefined =>
+    aggregateInFlight.get(key);
+
+  async function runAggregateCached(
+    cacheKey: string,
+    build: () => Promise<AggregateRun>,
+  ): Promise<AggregateRun> {
+    const inFlight = aggregateResolve(cacheKey);
+    if (inFlight !== undefined) return inFlight; // coalesce identical concurrent requests
+    if (aggregateCacheMs > 0) {
+      const cached = aggregateCache.get(cacheKey);
+      if (cached !== undefined && Date.now() - cached.at < aggregateCacheMs) {
+        return cached.payload;
+      }
+    }
+    const promise = build().then((payload) => {
+      if (aggregateCacheMs > 0) {
+        aggregateCache.set(cacheKey, { at: Date.now(), payload });
+      }
+      aggregateInFlight.delete(cacheKey);
+      return payload;
+    });
+    aggregateInFlight.set(cacheKey, promise);
+    promise.catch(() => {
+      // Failures are not cached; the next request rebuilds from scratch.
+      aggregateInFlight.delete(cacheKey);
+    });
+    return promise;
+  }
+
+  /**
+   * Bump on any runtime source mutation (config patch, import, rescan):
+   * cached catalog + aggregate results are content-derived and must go.
+   */
+  function invalidateCaches(): void {
+    cachedCatalog = null;
+    aggregateCache = new Map();
+    aggregateInFlight = new Map();
+  }
+
   app.addHook("onRequest", async (request) => {
     if (request.url.startsWith("/api/")) app.log.info({ method: request.method, url: request.url }, "api");
   });
 
   app.get("/api/health", { logLevel: "error" }, async () => ({ ok: true }));
 
-  app.get("/api/sources", { logLevel: "error" }, async () => {
+  async function describeSources(): Promise<unknown> {
     const [catalogResult, snapshotStatus] = await Promise.all([catalogGuard(catalog()), snapshotStore.describe()]);
     const sources: Record<string, unknown> = { snapshots: snapshotStatus };
     for (const run of catalogResult.runs) {
       sources[run.id] = { ...run.status, error: run.error ?? undefined };
+    }
+    if (runtime.importedUniverse) {
+      // The universe is always in `catalogResult.runs` too; this is the alias
+      // pointing at the mode so clients can toggle UI straight from /sources.
+      sources.universe = { mode: "imported" };
     }
     const statuses = Object.values(sources) as Array<{ state?: string; available?: boolean }>;
     const degraded =
@@ -150,7 +216,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       status: unavailable ? "unavailable" : degraded ? "degraded" : "ok",
       sources,
     };
-  });
+  }
+
+  app.get("/api/sources", { logLevel: "error" }, async () => describeSources());
 
   app.get("/api/sessions", { logLevel: "error" }, async (request) => {
     const catalogResult = await catalogGuard(catalog());
@@ -289,40 +357,41 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     return { sessions: selected, eventsBySession };
   };
 
-  const runAggregate = async (rawQuery: Record<string, unknown>): Promise<{
-    selection: AggregateSelectionDto;
-    result: AggregateResult;
-  }> => {
+  type AggregateRun = { selection: AggregateSelectionDto; result: AggregateResult };
+
+  const runAggregate = async (rawQuery: Record<string, unknown>): Promise<AggregateRun> => {
     const catalogResult = await catalogGuard(catalog());
     const query = parseAggregateQuery(rawQuery);
-    const selection = await resolveAggregateSelection(catalogResult, query);
-    let result: AggregateResult;
-    try {
-      result = await buildAggregate({
-        sessions: selection.sessions,
-        eventsBySession: selection.eventsBySession,
-        loadSnapshot: snapshotLoader,
-        mode: query.mode,
-        groundTruth: query.groundTruth,
-      });
-    } catch (error) {
-      // A bad group pick is the caller's fault: honest 400, not a 500.
-      if (error instanceof AggregateGroupError) {
-        throw new ApiError(error.code, error.message, 400);
+    return runAggregateCached(aggregateKey(query), async () => {
+      const selection = await resolveAggregateSelection(catalogResult, query);
+      let result: AggregateResult;
+      try {
+        result = await buildAggregate({
+          sessions: selection.sessions,
+          eventsBySession: selection.eventsBySession,
+          loadSnapshot: snapshotLoader,
+          mode: query.mode,
+          groundTruth: query.groundTruth,
+        });
+      } catch (error) {
+        // A bad group pick is the caller's fault: honest 400, not a 500.
+        if (error instanceof AggregateGroupError) {
+          throw new ApiError(error.code, error.message, 400);
+        }
+        throw error;
       }
-      throw error;
-    }
-    return {
-      selection: {
-        mode: query.mode,
-        group: query.group,
-        sessions: selection.sessions.map(toSessionDto),
-        fromMs: query.fromMs ?? null,
-        toMs: query.toMs ?? null,
-        status: catalogResult.status,
-      },
-      result,
-    };
+      return {
+        selection: {
+          mode: query.mode,
+          group: query.group,
+          sessions: selection.sessions.map(toSessionDto),
+          fromMs: query.fromMs ?? null,
+          toMs: query.toMs ?? null,
+          status: catalogResult.status,
+        },
+        result,
+      };
+    });
   };
 
   app.get("/api/aggregate", { logLevel: "error" }, async (request) =>
@@ -337,6 +406,19 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       .send(aggregateToCsv(result));
   });
 
+
+  /* ------------------------------------------ source runtime config (P6) */
+
+  registerSourceRoutes(app, {
+    runtime,
+    snapshotService,
+    invalidateCaches,
+    describeSources,
+    onSnapshotRootChange: () => {
+      snapshotStore = new LocalFsSnapshotStore(runtime.snapshotRoot.root);
+      snapshotService.setStore(snapshotStore);
+    },
+  });
 
   registerErrorHandlers(app, { spaIndexFile });
   return app;
@@ -372,23 +454,6 @@ function summarizeRun(catalogRun: ProviderRun): Record<string, unknown> {
     message: catalogRun.status.message,
     error: catalogRun.error ? { code: catalogRun.error.code, message: catalogRun.error.message } : undefined,
     facts: catalogRun.status.facts,
-  };
-}
-
-function defaultProviders(config: ToolConfig): () => SourceProvider[] {
-  return () => {
-    const list: SourceProvider[] = [new LpFileListSource({ root: config.lpRoot })];
-    // Influx last: files win for shared session ids (§6.1).
-    list.push(
-      new FluxInfluxSource({
-        url: config.influx.url,
-        org: config.influx.org,
-        bucket: config.influx.bucket,
-        token: config.influx.token,
-        timeoutMs: config.influx.timeoutMs,
-      }),
-    );
-    return list;
   };
 }
 

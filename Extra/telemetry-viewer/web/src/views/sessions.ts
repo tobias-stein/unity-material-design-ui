@@ -2,7 +2,7 @@
  * Sessions table view — the P1 client surface (search/filter + source pills),
  * now also the entry point into the P2 session timeline (`#/session/:id`).
  */
-import { api, ApiClientError, type SessionDto, type SourcesResponse } from "../api.js";
+import { api, ApiClientError, type SessionDto, type SourcesConfigResponse, type SourcesResponse } from "../api.js";
 
 export interface SessionsView {
   /** Detach listeners and clear timers (called on route change). */
@@ -15,12 +15,51 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <h1>UI Telemetry Viewer</h1>
-        <span class="phase-chip">P3 · aggregate</span>
+        <span class="phase-chip">P6 · sources</span>
         <a class="btn small" href="#/aggregate">Aggregate view →</a>
+        <button id="sources-toggle" class="btn small" type="button" aria-expanded="false">Sources ⚙</button>
       </div>
       <div id="source-status" class="source-status" role="status"></div>
     </header>
     <main class="layout">
+      <section id="sources-panel" class="panel sources-panel hidden" aria-label="Source configuration">
+        <h2>Sources — runtime configuration (applies without restart)</h2>
+        <div id="universe-banner"></div>
+        <div class="sources-grid">
+          <label class="switch">
+            <input id="cfg-influx" type="checkbox" />
+            <span>InfluxDB source</span>
+            <span id="cfg-influx-url" class="hint mono"></span>
+          </label>
+          <div class="field grow">
+            <label for="cfg-lproot">.lp directory <span class="hint">(<code>LP_ROOT</code> is the env default)</span></label>
+            <div class="row">
+              <input id="cfg-lproot" type="text" placeholder="environment default" autocomplete="off" spellcheck="false" />
+              <button id="cfg-lproot-apply" class="btn small">Apply</button>
+              <button id="cfg-lproot-reset" class="btn small" title="Clear the override — the LP_ROOT env default applies again">Reset</button>
+            </div>
+            <span id="cfg-lproot-info" class="hint"></span>
+          </div>
+          <div class="field grow">
+            <label for="cfg-snaproot">Snapshot directory <span class="hint">(<code>SNAPSHOT_ROOT</code> is the env default)</span></label>
+            <div class="row">
+              <input id="cfg-snaproot" type="text" placeholder="environment default" autocomplete="off" spellcheck="false" />
+              <button id="cfg-snaproot-apply" class="btn small">Apply</button>
+              <button id="cfg-snaproot-reset" class="btn small" title="Clear the override — the SNAPSHOT_ROOT env default applies again">Reset</button>
+            </div>
+            <span id="cfg-snaproot-info" class="hint"></span>
+          </div>
+          <button id="rescan" class="btn">Re-scan sources</button>
+        </div>
+        <div class="field grow">
+          <label for="import-files">Import .lp files — explicit pick defines a temporary session universe
+            <span class="hint">(files stay in browser + tool memory; nothing is written to disk)</span>
+          </label>
+          <input id="import-files" type="file" multiple accept=".lp,text/*" />
+        </div>
+        <div id="import-list" class="hint"></div>
+        <div id="sources-error" class="hint error" role="alert"></div>
+      </section>
       <section class="panel toolbar" aria-label="Filters">
         <div class="field">
           <label for="filter-q">Search</label>
@@ -46,7 +85,7 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
       </section>
     </main>
     <footer class="hints">
-      <span>Sessions come from the ledger (InfluxDB or <code>.lp</code> files) — owner info rides the <code>ui_snapshot_taken</code> points. Click a session for its timeline.</span>
+      <span>Sessions come from the ledger (InfluxDB or <code>.lp</code> files) — owner info rides the <code>ui_snapshot_taken</code> points. Click a session for its timeline. Use <em>Sources ⚙</em> to switch sources, re-scan or import files — all live, no restart.</span>
     </footer>
   `;
 
@@ -56,6 +95,165 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
   const limitInput = app.querySelector<HTMLInputElement>("#filter-limit")!;
   const statusEl = app.querySelector<HTMLDivElement>("#source-status")!;
   const stateEl = app.querySelector<HTMLDivElement>("#session-state")!;
+
+  /* ---------------------------------------------- sources panel (P6) */
+
+  const sourcesToggle = app.querySelector<HTMLButtonElement>("#sources-toggle")!;
+  const sourcesPanel = app.querySelector<HTMLElement>("#sources-panel")!;
+  const universeBanner = app.querySelector<HTMLDivElement>("#universe-banner")!;
+  const influxToggle = app.querySelector<HTMLInputElement>("#cfg-influx")!;
+  const influxUrl = app.querySelector<HTMLSpanElement>("#cfg-influx-url")!;
+  const lpRootInput = app.querySelector<HTMLInputElement>("#cfg-lproot")!;
+  const lpRootInfo = app.querySelector<HTMLSpanElement>("#cfg-lproot-info")!;
+  const snapRootInput = app.querySelector<HTMLInputElement>("#cfg-snaproot")!;
+  const snapRootInfo = app.querySelector<HTMLSpanElement>("#cfg-snaproot-info")!;
+  const importInput = app.querySelector<HTMLInputElement>("#import-files")!;
+  const importList = app.querySelector<HTMLDivElement>("#import-list")!;
+  const sourcesError = app.querySelector<HTMLDivElement>("#sources-error")!;
+  let panelPopulated = false;
+
+  function fmtBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+
+  function showSourcesError(message: string): void {
+    sourcesError.textContent = message;
+  }
+
+  function clearSourcesError(): void {
+    sourcesError.textContent = "";
+  }
+
+  function renderUniverseInfo(config: SourcesConfigResponse): void {
+    universeBanner.innerHTML = "";
+    if (config.universe.mode === "imported") {
+      const names = config.universe.files.map((file) => `${esc(file.name)} (${fmtBytes(file.bytes)})`).join(", ");
+      universeBanner.innerHTML = `
+        <span class="pill warn">imported universe active</span>
+        <span class="hint">${config.universe.events} events · ${config.universe.sessions.length} sessions · only the picked files are shown: ${names}
+          ${config.universe.malformedLines > 0 ? `· ${config.universe.malformedLines} malformed lines skipped` : ""}</span>`;
+      importList.innerHTML = `<button id="clear-import" class="btn small">Clear imported files</button> <span class="hint">back to InfluxDB + auto-scanned directory</span>`;
+      app.querySelector<HTMLButtonElement>("#clear-import")?.addEventListener("click", () => void clearImported());
+    } else {
+      universeBanner.innerHTML = `<span class="hint">Universe: all configured sources (InfluxDB ${config.influx.enabled ? "on" : "off"}${config.lpRoot.root ? " + .lp directory" : ""}). Import .lp files to temporarily narrow it to an explicit pick.</span>`;
+      importList.innerHTML = "";
+    }
+    influxToggle.checked = config.influx.enabled;
+    influxUrl.textContent = config.influx.url;
+    lpRootInput.placeholder = config.lpRoot.env ? `environment default: ${config.lpRoot.env}` : "environment default (none)";
+    lpRootInput.value = config.lpRoot.override ?? "";
+    lpRootInfo.textContent =
+      config.lpRoot.root === null
+        ? "not configured — the directory source is off"
+        : config.lpRoot.override !== undefined
+          ? `override active: ${config.lpRoot.root}`
+          : `using env default: ${config.lpRoot.root}`;
+    snapRootInput.placeholder = config.snapshotRoot.env ? `environment default: ${config.snapshotRoot.env}` : "environment default (none)";
+    snapRootInput.value = config.snapshotRoot.override ?? "";
+    snapRootInfo.textContent =
+      config.snapshotRoot.root === null
+        ? "not configured — snapshot replays resolve nothing (honest 503/404)"
+        : config.snapshotRoot.override !== undefined
+          ? `override active: ${config.snapshotRoot.root}`
+          : `using env default: ${config.snapshotRoot.root}`;
+    if (config.pinned) {
+      showSourcesError("Programmatic provider injection is active (embedded mode) — influx/.lp switches cannot take effect.");
+    }
+  }
+
+  async function populateSourcesPanel(force = false): Promise<void> {
+    if (disposed) return;
+    if (!force && panelPopulated) return;
+    clearSourcesError();
+    try {
+      const config = await api.sourcesConfig();
+      renderUniverseInfo(config);
+      panelPopulated = true;
+    } catch (error) {
+      showSourcesError(describeError(error));
+    }
+  }
+
+  async function patchConfig(patch: Parameters<typeof api.patchSourcesConfig>[0]): Promise<void> {
+    clearSourcesError();
+    try {
+      const { config, applied } = await api.patchSourcesConfig(patch);
+      renderUniverseInfo(config);
+      panelPopulated = true;
+      void loadSessions();
+      void refreshSourceStatusPills();
+      if (applied.length > 0) void populateSourcesPanel(true);
+    } catch (error) {
+      showSourcesError(describeError(error));
+    }
+  }
+
+  async function rescan(): Promise<void> {
+    clearSourcesError();
+    try {
+      await api.rescanSources();
+      await Promise.all([loadSessions(), refreshSourceStatusPills(), populateSourcesPanel(true)]);
+    } catch (error) {
+      showSourcesError(describeError(error));
+    }
+  }
+
+  async function clearImported(): Promise<void> {
+    clearSourcesError();
+    try {
+      await api.clearImportedFiles();
+      await Promise.all([loadSessions(), refreshSourceStatusPills(), populateSourcesPanel(true)]);
+    } catch (error) {
+      showSourcesError(describeError(error));
+    }
+  }
+
+  async function importPickedFiles(): Promise<void> {
+    clearSourcesError();
+    const picked = [...(importInput.files ?? [])];
+    if (picked.length === 0) return;
+    if (picked.some((file) => !file.name.toLowerCase().endsWith(".lp"))) {
+      showSourcesError("Only .lp line-protocol files can be imported.");
+      importInput.value = "";
+      return;
+    }
+    try {
+      const documents = await Promise.all(picked.map(async (file) => ({ name: file.name, content: await file.text() })));
+      const response = await api.putImportedFiles(documents);
+      importList.innerHTML = `<span class="hint">imported ${response.files.length} file(s) · ${response.events} events · ${response.sessions.length} session(s)</span> <button id="clear-import" class="btn small">Clear</button>`;
+      app.querySelector<HTMLButtonElement>("#clear-import")?.addEventListener("click", () => void clearImported());
+      await Promise.all([loadSessions(), refreshSourceStatusPills(), populateSourcesPanel(true)]);
+    } catch (error) {
+      showSourcesError(describeError(error));
+    } finally {
+      importInput.value = "";
+    }
+  }
+
+  sourcesToggle.addEventListener("click", () => {
+    const isHidden = sourcesPanel.classList.toggle("hidden");
+    sourcesToggle.setAttribute("aria-expanded", String(!isHidden));
+    if (!isHidden) void populateSourcesPanel();
+  });
+  influxToggle.addEventListener("change", () => {
+    void patchConfig({ influxEnabled: influxToggle.checked });
+  });
+  app.querySelector<HTMLButtonElement>("#cfg-lproot-apply")?.addEventListener("click", () => {
+    void patchConfig({ lpRoot: lpRootInput.value.trim() === "" ? null : lpRootInput.value.trim() });
+  });
+  app.querySelector<HTMLButtonElement>("#cfg-lproot-reset")?.addEventListener("click", () => {
+    void patchConfig({ lpRoot: null });
+  });
+  app.querySelector<HTMLButtonElement>("#cfg-snaproot-apply")?.addEventListener("click", () => {
+    void patchConfig({ snapshotRoot: snapRootInput.value.trim() === "" ? null : snapRootInput.value.trim() });
+  });
+  app.querySelector<HTMLButtonElement>("#cfg-snaproot-reset")?.addEventListener("click", () => {
+    void patchConfig({ snapshotRoot: null });
+  });
+  app.querySelector<HTMLButtonElement>("#rescan")?.addEventListener("click", () => void rescan());
+  importInput.addEventListener("change", () => void importPickedFiles());
 
   let sessionsAbort: AbortController | null = null;
   let debounceTimer: number | undefined;
@@ -85,6 +283,10 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
       return `${error.body.code}: ${error.body.message}${error.body.detail ? ` — ${error.body.detail}` : ""}`;
     }
     return error instanceof Error ? error.message : String(error);
+  }
+
+  async function refreshSourceStatusPills(): Promise<void> {
+    await renderSourceStatus();
   }
 
   async function renderSourceStatus(): Promise<void> {
@@ -179,7 +381,7 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
         </thead>
         <tbody>${rows.join("\n")}</tbody>
       </table>
-      <div class="table-hint">Aggregate heatmaps arrive in P3.</div>`;
+      <div class="table-hint"><a href="#/aggregate">Open the aggregate view →</a></div>`;
   }
 
   function shortId(id: string): string {
