@@ -16,10 +16,12 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY server/package.json server/
 COPY web/package.json web/
+COPY packages/snapshot-render/package.json packages/snapshot-render/
 RUN corepack enable && corepack pnpm install --frozen-lockfile
 
 COPY server server
 COPY web web
+COPY packages packages
 RUN corepack pnpm --filter @mdu/telemetry-viewer-server build \
     && corepack pnpm --filter @mdu/telemetry-viewer-web build
 
@@ -31,6 +33,7 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY server/package.json server/
 COPY web/package.json web/
+COPY packages/snapshot-render/package.json packages/snapshot-render/
 RUN corepack enable && corepack pnpm install --frozen-lockfile --prod
 
 COPY --from=build /app/server/dist server/dist
