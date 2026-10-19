@@ -1,0 +1,380 @@
+{
+  "_note": [
+    "captured by packages/snapshot-render/scripts/capture-golden.mjs from Extra/snapshot-viewer",
+    "sample fixture: fixtures/sample.yaml — replica + flex modes of the ORIGINAL viewer.js (pre-P5 extraction)."
+  ],
+  "replica": {
+    "stageClass": "replica",
+    "stageStyle": "width: 1728px; height: 1117px;",
+    "nodes": [
+      {
+        "tag": "div",
+        "class": "node kind-ui type-uidemo-main-menu selectable",
+        "style": "left: 0px; top: 0px; width: 1728px; height: 1117px; z-index: 1; background: rgb(254, 247, 255);",
+        "text": "",
+        "dataId": "9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-app-bar selectable type-appbar",
+        "style": "left: 0px; top: 0px; width: 1728px; height: 72px; z-index: 1; background: rgb(243, 237, 247);",
+        "text": "",
+        "dataId": "a1000000000000000000000000000001"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 16px; top: 16px; width: 320px; height: 40px; z-index: 1; font-size: 22px; font-weight: 400; white-space: pre-wrap; color: rgb(29, 27, 32);",
+        "text": "Material UI Demo",
+        "dataId": "a1000000000000000000000000000002"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-layout type-rect-transform selectable",
+        "style": "left: 344px; top: 12px; width: 1304px; height: 48px; z-index: 1;",
+        "text": "",
+        "dataId": "a1000000000000000000000000000003"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-button selectable",
+        "style": "left: 1664px; top: 12px; width: 48px; height: 48px; z-index: 1; border-radius: 24px; color: rgb(103, 80, 164);",
+        "text": "",
+        "dataId": "a1000000000000000000000000000004",
+        "children": [
+          {
+            "tag": "span",
+            "class": "node type-icon",
+            "style": "font-size: 24px; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; color: rgb(103, 80, 164);",
+            "text": "",
+            "dataId": "a1000000000000000000000000000004"
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "node kind-layout type-rect-transform selectable",
+        "style": "left: 0px; top: 72px; width: 1728px; height: 1045px; z-index: 1;",
+        "text": "",
+        "dataId": "b2000000000000000000000000000001"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 32px; top: 104px; width: 700px; height: 40px; z-index: 1; font-size: 24px; font-weight: 400; white-space: pre-wrap; color: rgb(29, 27, 32);",
+        "text": "Welcome back",
+        "dataId": "b2000000000000000000000000000002"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 32px; top: 168px; width: 700px; height: 44px; z-index: 1; font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(73, 69, 79);",
+        "text": "Rendered from a runtime YAML snapshot exported by the Unity UI.",
+        "dataId": "b2000000000000000000000000000003"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-surface selectable",
+        "style": "left: 32px; top: 236px; width: 700px; height: 200px; z-index: 1; background: rgb(243, 237, 247); border-radius: 16px;",
+        "text": "",
+        "dataId": "b2000000000000000000000000000004"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 56px; top: 260px; width: 400px; height: 24px; z-index: 1; font-size: 16px; font-weight: 500; letter-spacing: 0.024px; white-space: pre-wrap; color: rgb(29, 27, 32);",
+        "text": "Snapshot card",
+        "dataId": "b2000000000000000000000000000005"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 56px; top: 300px; width: 620px; height: 64px; z-index: 1; font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(73, 69, 79);",
+        "text": "Spacing, margins and layout groups were captured after an immediate layout rebuild.",
+        "dataId": "b2000000000000000000000000000006"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-layout type-rect-transform selectable",
+        "style": "left: 32px; top: 460px; width: 700px; height: 48px; z-index: 1;",
+        "text": "",
+        "dataId": "b2000000000000000000000000000007"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-button selectable",
+        "style": "left: 32px; top: 460px; width: 184px; height: 48px; z-index: 1; border-radius: 24px; background: rgb(103, 80, 164); color: rgb(255, 255, 255);",
+        "text": "Get started",
+        "dataId": "b2000000000000000000000000000008",
+        "children": [
+          {
+            "tag": "span",
+            "class": "",
+            "style": "font-size: 14px; font-weight: 500; letter-spacing: 0.1px;",
+            "text": "Get started"
+          },
+          {
+            "tag": "span",
+            "class": "node type-icon",
+            "style": "font-size: 24px; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; color: rgb(255, 255, 255);",
+            "text": "",
+            "dataId": "b2000000000000000000000000000008"
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-button selectable",
+        "style": "left: 232px; top: 460px; width: 112px; height: 48px; z-index: 1; border-radius: 24px; color: rgb(103, 80, 164);",
+        "text": "Skip",
+        "dataId": "b2000000000000000000000000000009",
+        "children": [
+          {
+            "tag": "span",
+            "class": "",
+            "style": "font-size: 14px; font-weight: 500; letter-spacing: 0.1px;",
+            "text": "Skip"
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "node kind-layout type-rect-transform selectable",
+        "style": "left: 32px; top: 532px; width: 700px; height: 56px; z-index: 1;",
+        "text": "",
+        "dataId": "b200000000000000000000000000000a"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-text selectable",
+        "style": "left: 32px; top: 548px; width: 600px; height: 24px; z-index: 1; font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(29, 27, 32);",
+        "text": "Dark theme",
+        "dataId": "b200000000000000000000000000000b"
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-switch selectable",
+        "style": "left: 680px; top: 544px; width: 52px; height: 32px; z-index: 1;",
+        "text": "",
+        "dataId": "b200000000000000000000000000000c",
+        "children": [
+          {
+            "tag": "span",
+            "class": "switch-track",
+            "style": "",
+            "text": "",
+            "children": [
+              {
+                "tag": "span",
+                "class": "switch-thumb",
+                "style": "",
+                "text": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "node kind-ui type-list-item selectable type-listitem",
+        "style": "left: 32px; top: 612px; width: 700px; height: 56px; z-index: 1; background: rgb(243, 237, 247); border-radius: 16px;",
+        "text": "",
+        "dataId": "b200000000000000000000000000000d"
+      }
+    ],
+    "status": "UIDemoMainMenu  ·  mdu.ui.UIDemoMainMenu  ·  18 nodes  ·  Sat Oct 17 2026 14:30:00 GMT+0000 (Coordinated Universal Time)  ·  light  ·  fixtures/sample.yaml"
+  },
+  "flex": {
+    "stageClass": "flex",
+    "stageStyle": "width: 1728px; height: 1117px;",
+    "nodes": [
+      {
+        "tag": "div",
+        "class": "node kind-ui type-uidemo-main-menu selectable",
+        "style": "background: rgb(254, 247, 255); width: 1728px; height: 1117px;",
+        "text": "Material UI DemoWelcome backRendered from a runtime YAML snapshot exported by the Unity UI.Snapshot cardSpacing, margins and layout groups were captured after an immediate layout rebuild.Get startedSkipDark theme",
+        "dataId": "9f1c4d2e8b7a4c6d9e0f1a2b3c4d5e6f",
+        "children": [
+          {
+            "tag": "div",
+            "class": "node kind-ui type-app-bar selectable type-appbar",
+            "style": "background: rgb(243, 237, 247); width: 1728px; height: auto; flex: 0 0 auto; display: flex; flex-direction: row; gap: 8px; padding: 12px 16px 12px 16px; justify-content: flex-start; align-items: flex-end;",
+            "text": "Material UI Demo",
+            "dataId": "a1000000000000000000000000000001",
+            "children": [
+              {
+                "tag": "div",
+                "class": "node kind-ui type-text selectable",
+                "style": "font-size: 22px; font-weight: 400; white-space: pre-wrap; color: rgb(29, 27, 32); width: 320px; height: 40px; flex: 0 0 auto;",
+                "text": "Material UI Demo",
+                "dataId": "a1000000000000000000000000000002"
+              },
+              {
+                "tag": "div",
+                "class": "node kind-layout type-rect-transform selectable",
+                "style": "width: 1304px; height: 48px; flex: 0 0 auto;",
+                "text": "",
+                "dataId": "a1000000000000000000000000000003"
+              },
+              {
+                "tag": "div",
+                "class": "node kind-ui type-button selectable",
+                "style": "border-radius: 24px; color: rgb(103, 80, 164); width: 48px; height: 48px; flex: 0 0 auto;",
+                "text": "",
+                "dataId": "a1000000000000000000000000000004",
+                "children": [
+                  {
+                    "tag": "span",
+                    "class": "node type-icon",
+                    "style": "font-size: 24px; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; color: rgb(103, 80, 164);",
+                    "text": "",
+                    "dataId": "a1000000000000000000000000000004"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "div",
+            "class": "node kind-layout type-rect-transform selectable",
+            "style": "width: auto; height: 1045px; flex: 0 0 auto; display: flex; flex-direction: column; gap: 24px; padding: 32px 32px 32px 32px; justify-content: flex-start; align-items: flex-start;",
+            "text": "Welcome backRendered from a runtime YAML snapshot exported by the Unity UI.Snapshot cardSpacing, margins and layout groups were captured after an immediate layout rebuild.Get startedSkipDark theme",
+            "dataId": "b2000000000000000000000000000001",
+            "children": [
+              {
+                "tag": "div",
+                "class": "node kind-ui type-text selectable",
+                "style": "font-size: 24px; font-weight: 400; white-space: pre-wrap; color: rgb(29, 27, 32); width: 700px; height: 40px; flex: 0 0 auto;",
+                "text": "Welcome back",
+                "dataId": "b2000000000000000000000000000002"
+              },
+              {
+                "tag": "div",
+                "class": "node kind-ui type-text selectable",
+                "style": "font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(73, 69, 79); width: 700px; height: 44px; flex: 0 0 auto;",
+                "text": "Rendered from a runtime YAML snapshot exported by the Unity UI.",
+                "dataId": "b2000000000000000000000000000003"
+              },
+              {
+                "tag": "div",
+                "class": "node kind-ui type-surface selectable",
+                "style": "background: rgb(243, 237, 247); border-radius: 16px; width: auto; height: 200px; flex: 0 0 auto; display: flex; flex-direction: column; gap: 16px; padding: 24px 24px 24px 24px; justify-content: flex-start; align-items: flex-start;",
+                "text": "Snapshot cardSpacing, margins and layout groups were captured after an immediate layout rebuild.",
+                "dataId": "b2000000000000000000000000000004",
+                "children": [
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-text selectable",
+                    "style": "font-size: 16px; font-weight: 500; letter-spacing: 0.024px; white-space: pre-wrap; color: rgb(29, 27, 32); width: 400px; height: 24px; flex: 0 0 auto;",
+                    "text": "Snapshot card",
+                    "dataId": "b2000000000000000000000000000005"
+                  },
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-text selectable",
+                    "style": "font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(73, 69, 79); width: 620px; height: 64px; flex: 0 0 auto;",
+                    "text": "Spacing, margins and layout groups were captured after an immediate layout rebuild.",
+                    "dataId": "b2000000000000000000000000000006"
+                  }
+                ]
+              },
+              {
+                "tag": "div",
+                "class": "node kind-layout type-rect-transform selectable",
+                "style": "width: 700px; height: auto; flex: 0 0 auto; display: flex; flex-direction: row; gap: 16px; padding: 0px 0px 0px 0px; justify-content: flex-start; align-items: flex-end;",
+                "text": "Get startedSkip",
+                "dataId": "b2000000000000000000000000000007",
+                "children": [
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-button selectable",
+                    "style": "border-radius: 24px; background: rgb(103, 80, 164); color: rgb(255, 255, 255); width: fit-content; height: fit-content; flex: 0 0 auto;",
+                    "text": "Get started",
+                    "dataId": "b2000000000000000000000000000008",
+                    "children": [
+                      {
+                        "tag": "span",
+                        "class": "",
+                        "style": "font-size: 14px; font-weight: 500; letter-spacing: 0.1px;",
+                        "text": "Get started"
+                      },
+                      {
+                        "tag": "span",
+                        "class": "node type-icon",
+                        "style": "font-size: 24px; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; color: rgb(255, 255, 255);",
+                        "text": "",
+                        "dataId": "b2000000000000000000000000000008"
+                      }
+                    ]
+                  },
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-button selectable",
+                    "style": "border-radius: 24px; color: rgb(103, 80, 164); width: 112px; height: 48px; flex: 0 0 auto;",
+                    "text": "Skip",
+                    "dataId": "b2000000000000000000000000000009",
+                    "children": [
+                      {
+                        "tag": "span",
+                        "class": "",
+                        "style": "font-size: 14px; font-weight: 500; letter-spacing: 0.1px;",
+                        "text": "Skip"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "div",
+                "class": "node kind-layout type-rect-transform selectable",
+                "style": "width: 700px; height: 56px; flex: 0 0 auto; display: flex; flex-direction: row; gap: 16px; padding: 0px 0px 0px 0px; justify-content: flex-start; align-items: flex-end;",
+                "text": "Dark theme",
+                "dataId": "b200000000000000000000000000000a",
+                "children": [
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-text selectable",
+                    "style": "font-size: 14px; font-weight: 400; letter-spacing: 0.035px; white-space: pre-wrap; color: rgb(29, 27, 32); width: 600px; height: 24px; flex: 0 0 auto;",
+                    "text": "Dark theme",
+                    "dataId": "b200000000000000000000000000000b"
+                  },
+                  {
+                    "tag": "div",
+                    "class": "node kind-ui type-switch selectable",
+                    "style": "width: 52px; height: 32px; flex: 0 0 auto;",
+                    "text": "",
+                    "dataId": "b200000000000000000000000000000c",
+                    "children": [
+                      {
+                        "tag": "span",
+                        "class": "switch-track",
+                        "style": "",
+                        "text": "",
+                        "children": [
+                          {
+                            "tag": "span",
+                            "class": "switch-thumb",
+                            "style": "",
+                            "text": ""
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "tag": "div",
+                "class": "node kind-ui type-list-item selectable type-listitem",
+                "style": "background: rgb(243, 237, 247); border-radius: 16px; width: 700px; height: 56px; flex: 0 0 auto;",
+                "text": "",
+                "dataId": "b200000000000000000000000000000d"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "status": "UIDemoMainMenu  ·  mdu.ui.UIDemoMainMenu  ·  18 nodes  ·  Sat Oct 17 2026 14:30:00 GMT+0000 (Coordinated Universal Time)  ·  light  ·  fixtures/sample.yaml"
+  }
+}

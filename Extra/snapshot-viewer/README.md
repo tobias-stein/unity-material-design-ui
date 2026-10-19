@@ -4,17 +4,41 @@ Standalone HTML renderer for UI snapshots exported at runtime by
 `Assets/Runtime/Telemetry/` (schemaVersion 2). Renders with Material 3 tokens —
 no build step, no framework.
 
+All rendering lives in the shared package
+**`Extra/telemetry-viewer/packages/snapshot-render`** (`@mdu/snapshot-render`):
+the same replica DOM / flex re-layout / theme code drives this page and the
+telemetry viewer's replay panel + heatmaps. This page loads one declared
+bundle — `../telemetry-viewer/packages/snapshot-render/dist/snapshot-render.global.js`
+— and keeps only the tool chrome (tree, inspector, selection, file loading).
+`vendor/js-yaml.min.js` remains the only vendored third-party file (parsing,
+not rendering).
+
 ## Run
 
+The rendered code is shared, so build the package once (TypeScript source →
+IIFE bundle) and serve the `Extra/` directory as the web root so the sibling
+import resolves:
+
 ```sh
-cd Extra/snapshot-viewer
-python3 -m http.server 8000
-# open http://localhost:8000
+cd Extra/telemetry-viewer
+corepack pnpm install
+corepack pnpm --filter @mdu/snapshot-render build
+
+cd ..
+python3 -m http.server 8000 --directory Extra
+# open http://localhost:8000/snapshot-viewer/
 ```
 
 Opening `index.html` directly from disk (file://) also works for loading local
-`.yaml` / `.yaml.gz` files via drag-and-drop — only the **Load sample** button
-needs HTTP.
+`.yaml` / `.yaml.gz` files via drag-and-drop (classic scripts load fine from
+file://) — only the **Load sample** button needs HTTP.
+
+Regenerating the shared bundle after editing it from the telemetry-viewer
+side: `corepack pnpm --filter @mdu/snapshot-render build` inside
+`Extra/telemetry-viewer`. Render changes must not break this page — DOM-equal
+goldens (`test/standaloneParity.spec.ts` in the package, captured from the
+original pre-extraction viewer.js) lock the parity; load-sample and drag-drop
+were re-verified manually per P5.
 
 ## Usage
 
@@ -33,6 +57,9 @@ The status bar shows a warning when the geometry looks unrenderable — e.g.
 *“N of M nodes lie outside the root”*, which means the snapshot was captured
 before Unity applied layout (re-capture after the view settled).
 
+The same warning also drives the telemetry viewer (filmstrip ⚠ marks and
+replica warning chips) — one shared implementation in the package.
+
 ## Where snapshots come from
 
 Default export directory (per platform):
@@ -48,6 +75,30 @@ Triggers (configurable via `Resources/Settings/TelemetrySettings` asset or
 - **F9** (editor/dev builds by default) — capture the active view
 - **view transitions** — auto-capture after `pushAsync`/`popAsync` completes
   (rate-limited, deduped, retention-pruned)
+
+Every **successful** snapshot export additionally records one ledger point in
+the same event stream (`ui_snapshot_taken`) so tools can find and identify
+snapshots without re-parsing files. `TelemetryConfig.snapshotLedger` (default
+on) gates it:
+
+```
+ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH> <ns>
+```
+
+- **`key`** — device-agnostic storage key
+  (`snapshots/<yyyy>/<mm>/<dd>/<viewName>-<HHmmss>[-n].yaml[.gz]`, forward
+  slashes). The exporter keeps writing the legacy flat layout on disk; the
+  key is a lookup hint.
+- **`hash`** — SHA-256 of the exact written bytes: the *join key* for
+  matching ledger points to files (resilient to renames/copies).
+- Tags are the bounded set `session/view/view_id`; everything identifying
+  lives in fields (no series-cardinality explosion). The point lands in the
+  same sinks as every other event — `pending-*.lp` while InfluxDB is down,
+  `session-<sid>.lp` in file-archive mode.
+
+`Extra/telemetry-viewer` consumes these points (its README's "P0 ledger
+basis" section documents the semantics); this viewer renders the files
+themselves and needs neither the ledger nor InfluxDB.
 
 ## Schema (v2)
 
@@ -120,6 +171,9 @@ session,type=end session=<sid> value=1i <ns>
 
 - Event types: `click`, `toggle` (`on=` new state), `close`,
   `backdrop_click`, `view_open`, `view_close` (`dwell=` seconds open).
+- Snapshot exports add the ledger point `ui_snapshot_taken` (shape above —
+  `key` storage key + `hash` join key), which is how the telemetry viewer
+  correlates sessions with the files on disk.
 - A session starts at Unity launch and whenever `Telemetry.newSession()` is
   called (the old session is flushed and closed with `session,type=end` first).
 
@@ -145,7 +199,9 @@ docker compose up -d   # UI: http://localhost:8086 (admin/adminadmin), org=mdu, 
 ```
 
 The compose file's org/bucket/token must match the `TelemetryConfig` InfluxDB
-defaults (both files document this).
+defaults (both files document this). The `telemetry-viewer` service in that
+compose file serves the cross-session views
+(http://localhost:8087 — sessions, timeline, aggregate heatmaps).
 
 **`influxEnabled = false` — file archive:** events append to
 `…/Telemetry/events/session-<sessionId>.lp` (one file per session,
@@ -181,6 +237,9 @@ line.
 
 ## Dependencies
 
+- `../telemetry-viewer/packages/snapshot-render/dist/snapshot-render.global.js`
+  — the shared rendering core (declared import; **never vendor/duplicate**
+  this; rebuild with `corepack pnpm --filter @mdu/snapshot-render build`)
 - `vendor/js-yaml.min.js` — vendored (offline parsing), js-yaml 4.1.0 (MIT)
 - Google Fonts (CDN, optional): Roboto + Material Symbols Outlined — icons fall
   back to raw glyph codepoints when offline

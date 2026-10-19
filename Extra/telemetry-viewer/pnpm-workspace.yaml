@@ -1,7 +1,7 @@
 packages:
   - server
   - web
-  - packages/*  # snapshot-render shared rendering library (P2 playhead + filmstrip)
+  - packages/*  # @mdu/snapshot-render — shared rendering core consumed by this tool AND the standalone Extra/snapshot-viewer
 
 # Explicitly reviewed script execution (pnpm ≥ 12: allowBuilds, was
 # onlyBuiltDependencies). Only these dependencies may run postinstall build

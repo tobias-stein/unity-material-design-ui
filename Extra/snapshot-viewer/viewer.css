@@ -133,7 +133,9 @@ main {
   overflow: hidden;
   flex: none;
 }
+/* the shared package nests one stage element inside the wrapper */
 #stage.flex { display: block; overflow: visible; }
+#stage > .replica-stage { position: relative; }
 
 .zoom-badge {
   position: absolute;
@@ -250,8 +252,9 @@ main {
 }
 
 .node.selectable { cursor: pointer; }
-/* only top-level nodes are absolutely placed; nested .node spans (button icons) stay inline */
-#stage.replica > .node { position: absolute; }
+/* the shared renderer places nodes inside its stage element; nested .node
+   spans (button icons) stay inline */
+#stage.replica > .replica-stage > .node { position: absolute; }
 .node.selectable:hover { outline: 1px dashed color-mix(in srgb, var(--m3-primary, #6750a4) 70%, #fff); }
 .node.selected {
   outline: 2px solid var(--select) !important;

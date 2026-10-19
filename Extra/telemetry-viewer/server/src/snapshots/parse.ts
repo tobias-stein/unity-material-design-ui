@@ -120,9 +120,18 @@ export function parseSnapshotText(text: string): ParsedSnapshot {
     throw new SnapshotParseError("SNAPSHOT_EMPTY", "Snapshot contains no nodes.");
   }
 
-  // Id normalization mirrors the standalone viewer exactly (render parity
-  // is a P5 goal): missing ids get `anon:<n>` fallbacks, duplicates get
-  // `#<n>` suffixes in insertion order.
+  // Id normalization mirrors the standalone viewer exactly (render parity is a
+  // P5 goal): missing ids get `anon:<n>` fallbacks, duplicates get `#<n>`
+  // suffixes in insertion order.
+  //
+  // This pipeline is the server twin of the standalone viewer's normalization
+  // (`@mdu/snapshot-render/normalize`): the shared package owns the *rendering*
+  // (P5) and its normalize module drives the standalone page; the server keeps
+  // its own DOM-free copy because (a) at production runtime Node cannot load
+  // the package's TS sources, and (b) parity is asserted both ways by tests —
+  // `test/snapshots.spec.ts` (id normalization equality) and the package's
+  // `test/standaloneParity.spec.ts` (actual DOM equality against goldens
+  // captured from the pre-extraction viewer).
   const nodes: SnapshotNodeShape[] = doc.nodes.map((rawNode) => ({
     ...((rawNode ?? {}) as Record<string, unknown>),
   }));

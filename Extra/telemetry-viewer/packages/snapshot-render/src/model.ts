@@ -5,14 +5,14 @@
  * partially-captured nodes (`unknown` where the exporter may omit fields).
  */
 
-export interface SnapshotRect {
+export type SnapshotRect = {
   x?: number;
   y?: number;
   width?: number;
   height?: number;
 }
 
-export interface SnapshotAnchorShape {
+export type SnapshotAnchorShape = {
   pivotX?: number;
   pivotY?: number;
   anchorMinX?: number;
@@ -25,7 +25,7 @@ export interface SnapshotAnchorShape {
   sizeY?: number;
 }
 
-export interface SnapshotLayoutShape {
+export type SnapshotLayoutShape = {
   type?: string;
   runtimeSwitchable?: boolean;
   paddingLeft?: number;
@@ -41,7 +41,7 @@ export interface SnapshotLayoutShape {
   reverseArrangement?: boolean;
 }
 
-export interface SnapshotLayoutElementShape {
+export type SnapshotLayoutElementShape = {
   minWidth?: number;
   minHeight?: number;
   preferredWidth?: number;
@@ -51,12 +51,12 @@ export interface SnapshotLayoutElementShape {
   ignoreLayout?: boolean;
 }
 
-export interface SnapshotContentSizeFitterShape {
+export type SnapshotContentSizeFitterShape = {
   horizontalMode?: string;
   verticalMode?: string;
 }
 
-export interface SnapshotResolvedShape {
+export type SnapshotResolvedShape = {
   colorRoles?: Record<string, string> | null;
   textRole?: string | null;
   text?: string | null;
@@ -73,7 +73,7 @@ export interface SnapshotResolvedShape {
   cornerRadius?: number | null;
 }
 
-export interface SnapshotNode {
+export type SnapshotNode = {
   id: string;
   kind?: string;
   name?: string;
@@ -93,7 +93,7 @@ export interface SnapshotNode {
   resolved?: SnapshotResolvedShape | null;
 }
 
-export interface SnapshotTextStyle {
+export type SnapshotTextStyle = {
   fontSize?: number;
   fontWeight?: string;
   fontStyle?: string;
@@ -102,7 +102,7 @@ export interface SnapshotTextStyle {
   lineSpacing?: number;
 }
 
-export interface SnapshotTheme {
+export type SnapshotTheme = {
   seedColor?: string;
   isDark?: boolean;
   deviceType?: string;
@@ -112,14 +112,14 @@ export interface SnapshotTheme {
   typography?: Record<string, SnapshotTextStyle>;
 }
 
-export interface SnapshotViewInfo {
+export type SnapshotViewInfo = {
   id?: string;
   name?: string;
   type?: string;
   layer?: string;
 }
 
-export interface SnapshotAppInfo {
+export type SnapshotAppInfo = {
   productName?: string;
   productVersion?: string;
   unityVersion?: string;
@@ -132,9 +132,9 @@ export interface SnapshotAppInfo {
 }
 
 /** The parsed snapshot document consumed by the renderers (schema v2 / v1). */
-export interface UISnapshot {
-  schemaVersion: number;
-  timestampUtc?: string | null;
+export type UISnapshot = {
+  schemaVersion: number | null;
+  timestampUtc?: string | Date | null;
   app?: SnapshotAppInfo | null;
   view?: SnapshotViewInfo | null;
   theme?: SnapshotTheme | null;
@@ -143,15 +143,4 @@ export interface UISnapshot {
   childrenOf: Record<string, string[]>;
   rootId: string;
   warnings: string[];
-}
-
-export interface SnapshotRenderOptions {
-  /** Root palette to apply: the snapshot's captured theme by default. */
-  palette?: Record<string, string> | null;
-  /** Root typography table to apply (snapshot's captured theme by default). */
-  typography?: Record<string, SnapshotTextStyle> | null;
-  /** Debug outlines for pure layout containers. */
-  showLayoutOutlines?: boolean;
-  /** Extra CSS class(es) on the stage element. */
-  stageClassName?: string;
 }

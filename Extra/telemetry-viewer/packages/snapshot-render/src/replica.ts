@@ -1,12 +1,18 @@
 /**
  * Replica renderer — elastic port of the standalone snapshot viewer's
- * `createNodeEl` path (Extra/snapshot-viewer/viewer.js): flat, root-relative
- * absolute positioning in export order, Material 3 styling from the snapshot
- * itself (or the default-light baseline), text/icon settings from resolved +
- * theme data with the same TMP quirk handling.
+ * `createNodeEl` path (originally `Extra/snapshot-viewer/viewer.js`, now
+ * the *single* implementation consumed by both the standalone page and the
+ * telemetry viewer): flat, root-relative absolute positioning in export
+ * order, Material 3 styling from the snapshot itself (or the default-light
+ * baseline), text/icon settings from resolved + theme data with the same TMP
+ * quirk handling.
  *
  * The caller owns the CSS rule set (class names are identical between the
  * standalone viewer and this package: .node, .type-text, .type-button, …).
+ *
+ * DOM parity with the pre-extraction standalone viewer is locked by
+ * `test/standaloneParity.spec.ts`, which renders `fixtures/sample.yaml`
+ * through the real page (goldens captured from the original viewer.js).
  */
 import type { SnapshotNode, SnapshotTextStyle, UISnapshot } from "./model.js";
 import { hex, paletteColor, typeBaseName, fontWeight, colorAlpha } from "./colors.js";
@@ -20,10 +26,34 @@ export interface ReplicaRenderResult {
   height: number;
 }
 
+export interface StageOptions {
+  /** Extra classes on the stage element (e.g. the standalone page flags). */
+  stageClassName?: string;
+  /**
+   * Standalone-viewer interaction hooks: every node gets `data-id` and the
+   * `.selectable` class (click-to-select, hover outline). The telemetry
+   * viewer never selects nodes this way and omits them.
+   */
+  selectable?: boolean;
+  /**
+   * `z-index: 1` on positioned replica nodes — the standalone viewer's
+   * stacking contract (keeps `.selected` outlines above siblings). Changes
+   * overlay stacking semantics, so the tool opts out.
+   */
+  zIndex?: boolean;
+}
+
 /** Build (or rebuild) the full replica stage for a snapshot. */
-export function buildReplicaStage(snapshot: UISnapshot, container: HTMLElement, mode: "default-light" | "raw" = "default-light"): ReplicaRenderResult {
+export function buildReplicaStage(
+  snapshot: UISnapshot,
+  container: HTMLElement,
+  mode: "default-light" | "raw" = "default-light",
+  options: StageOptions = {},
+): ReplicaRenderResult {
   const stage = document.createElement("div");
   stage.className = `replica-stage${snapshot.schemaVersion === 1 ? " schema-v1" : ""}`;
+  if (snapshot.warnings.length > 0) stage.classList.add("has-warnings");
+  if (options.stageClassName) stage.classList.add(options.stageClassName);
 
   const theme = resolveTheme(mode, snapshot.theme ?? null);
   // Token normalization: snapshot palettes use PascalCase roles ("OnPrimary");
@@ -38,12 +68,10 @@ export function buildReplicaStage(snapshot: UISnapshot, container: HTMLElement, 
   stage.style.height = `${height}px`;
   stage.style.background = palette.background ?? "#fef7ff";
 
-  if (snapshot.warnings.length > 0) {
-    stage.classList.add("has-warnings");
-  }
-
   for (const node of snapshot.nodes) {
-    stage.appendChild(createNodeElement(node, snapshot, palette, typography));
+    stage.appendChild(
+      createNodeElement(node, { snapshot, palette, typography, options, geometry: "absolute" }),
+    );
   }
 
   container.innerHTML = "";
@@ -73,12 +101,22 @@ function normalizePaletteKeys(palette: Record<string, string> | null): Record<st
 
 /* ---------------------------------------------------------------- node factory */
 
-function createNodeElement(
-  node: SnapshotNode,
-  snapshot: UISnapshot,
-  palette: Record<string, string>,
-  typography: Exclude<UISnapshot["theme"], null | undefined>["typography"] | null,
-): HTMLDivElement {
+/** Shared per-snapshot render context, passed to every node factory call. */
+export interface NodeContext {
+  snapshot: UISnapshot;
+  palette: Record<string, string>;
+  typography: Record<string, SnapshotTextStyle> | null;
+  options: StageOptions;
+  /** "absolute" places nodes root-relative (replica); "flow" lets the flex builder own sizing. */
+  geometry: "absolute" | "flow";
+}
+
+/**
+ * The one node factory both render modes share. Style-operation *order*
+ * mirrors the original viewer.js exactly (the golden parity test compares
+ * the serialized `style` attribute).
+ */
+export function createNodeElement(node: SnapshotNode, context: NodeContext): HTMLDivElement {
   const type = typeBaseName(node.type);
   const el = document.createElement("div");
   const slugType = type.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
@@ -86,31 +124,38 @@ function createNodeElement(
   // Node id for tool-side overlays (aggregate heatmaps key by canonical
   // element → template node id). Harmless for the standalone viewer.
   el.dataset.nodeId = node.id;
+  if (context.options.selectable) {
+    el.classList.add("selectable");
+    el.dataset.id = node.id;
+  }
 
-  if (node.rect) {
+  // geometry — replica root-relative absolute placement (flex mode overrides
+  // with its own sizing right after creation)
+  if (context.geometry === "absolute" && node.rect) {
     el.style.left = `${node.rect.x ?? 0}px`;
     el.style.top = `${node.rect.y ?? 0}px`;
     el.style.width = `${node.rect.width ?? 0}px`;
     el.style.height = `${node.rect.height ?? 0}px`;
+    if (context.options.zIndex) el.style.zIndex = "1";
   }
 
   const resolved = node.resolved ?? {};
-  const background = backgroundFor(palette, resolved);
+  const background = backgroundFor(context.palette, resolved);
   if (background) el.style.background = background;
-  applyOutline(el, palette, resolved);
+  applyOutline(el, context.palette, resolved);
   if (typeof resolved.opacity === "number" && resolved.opacity !== 1) el.style.opacity = String(resolved.opacity);
   if (typeof resolved.cornerRadius === "number" && resolved.cornerRadius > 0) el.style.borderRadius = `${resolved.cornerRadius}px`;
   else if (type === "Button") applyButtonShape(el, node);
 
   if (node.isView) {
-    el.style.background = background || palette.background || "transparent";
+    el.style.background = background || context.palette.background || "transparent";
   }
 
   switch (type) {
-    case "Text": applyTextStyles(el, node, palette, typography); break;
-    case "Icon": applyIconStyles(el, node, palette); break;
-    case "Button": applyButtonStyles(el, node, snapshot, palette, typography); break;
-    case "Switch": applySwitch(el, node, snapshot); break;
+    case "Text": applyTextStyles(el, node, context.palette, context.typography); break;
+    case "Icon": applyIconStyles(el, node, context.palette); break;
+    case "Button": applyButtonStyles(el, node, context); break;
+    case "Switch": applySwitch(el, node, context); break;
     case "Chip": el.classList.add("type-chip"); break;
     case "ListItem": el.classList.add("type-listitem"); break;
     case "AppBar": el.classList.add("type-appbar"); break;
@@ -239,13 +284,11 @@ function applyIconStyles(el: HTMLElement, node: SnapshotNode, palette: Record<st
 
 /* ------------------------------------------------------------------ button */
 
-function applyButtonStyles(
-  el: HTMLElement,
-  node: SnapshotNode,
-  snapshot: UISnapshot,
-  palette: Record<string, string>,
-  typography: Record<string, SnapshotTextStyle> | null | undefined,
-): void {
+function applyButtonStyles(el: HTMLElement, node: SnapshotNode, context: NodeContext): void {
+  const palette = context.palette;
+  const typography = context.typography;
+  const snapshot = context.snapshot;
+
   el.classList.add("type-button");
   const data = (node.data ?? {}) as Record<string, unknown>;
   const style = typeof data.style === "string" ? data.style : "Filled";
@@ -315,6 +358,7 @@ function applyButtonStyles(
     const iconFont = document.createElement("span");
     iconFont.className = "node type-icon";
     iconFont.textContent = String.fromCharCode(icon.code);
+    if (context.options.selectable) iconFont.dataset.id = node.id; // clicks on the glyph select the whole button
     const iconPx = iconSizeFor(data.size) || 24;
     iconFont.style.fontSize = `${iconPx}px`;
     iconFont.style.fontVariationSettings = `'FILL' ${icon.fill ? 1 : 0}, 'wght' 400, 'GRAD' 0, 'opsz' 24`;
@@ -323,7 +367,7 @@ function applyButtonStyles(
     else el.prepend(iconFont);
   }
 
-  if (node.rect && (node.rect.height ?? 0) > 0) {
+  if (node.rect && (node.rect.height ?? 0) > 0 && context.geometry === "absolute") {
     el.style.height = `${node.rect.height}px`;
   }
 }
@@ -358,10 +402,10 @@ function iconSizeFor(size: unknown): number | null {
 
 /* ------------------------------------------------------------------ switch */
 
-function applySwitch(el: HTMLElement, node: SnapshotNode, snapshot: UISnapshot): void {
+function applySwitch(el: HTMLElement, node: SnapshotNode, context: NodeContext): void {
   el.classList.add("type-switch");
   const data = (node.data ?? {}) as Record<string, unknown>;
   if (data.checked || data.value || data.isOn) el.classList.add("checked");
-  if ((snapshot.childrenOf[node.id] ?? []).length) return; // real track/handle nodes render themselves
+  if ((context.snapshot.childrenOf[node.id] ?? []).length) return; // real track/handle nodes render themselves
   el.innerHTML = '<span class="switch-track"><span class="switch-thumb"></span></span>';
 }

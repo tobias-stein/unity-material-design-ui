@@ -24,9 +24,13 @@ Local (non-docker) development, equivalent flow:
 ```bash
 cd Extra/telemetry-viewer
 corepack pnpm install
-corepack pnpm --filter @mdu/telemetry-viewer-web build   # static client
+corepack pnpm build   # shared render package → server → static web client
 corepack pnpm --filter @mdu/telemetry-viewer-server dev   # Fastify :8087
 ```
+
+`pnpm build` also refreshes the browser bundle that the standalone
+`Extra/snapshot-viewer` consumes (see its README — one declared import, no
+vendored render code).
 
 ## What ships in P1
 
@@ -266,9 +270,18 @@ tests run against (`./scripts/export-fixtures.sh` regenerates):
 
 ```bash
 cd Extra/telemetry-viewer
-corepack pnpm --filter @mdu/telemetry-viewer-server test     # 89 tests
-corepack pnpm test                                          # whole workspace
+corepack pnpm --filter @mdu/telemetry-viewer-server test     # 111 tests
+corepack pnpm test                                          # whole workspace (server + shared package)
 ```
+
+P5 adds the shared package's own suite (`corepack pnpm --filter
+@mdu/snapshot-render test`, builds the browser bundle first):
+`standaloneParity.spec.ts` — the P5 side-by-side check (real snapshot-viewer
+page in jsdom vs. goldens captured from the pre-extraction viewer.js, replica
++ flex + status line) — and `normalize.spec.ts` (anon/duplicate ids, hierarchy
++ orphan re-attachment, schema-drift wording, geometry-warning threshold).
+The server's `snapshots.spec.ts` keeps asserting that its DOM-free parser
+stays output-equal to the standalone semantics.
 
 P2 adds `timeline.spec.ts` (correlation "latest ≤ t", unresolved-never-dropped,
 event-count invariance, dwell spans, synthetic 5k frame) and
@@ -285,6 +298,41 @@ key; mode-A hiding; template stability across repeated queries; unresolved
 reason buckets; CSV quoting), and `aggregateApi.spec.ts` (route-level
 selection rules, uniform error envelopes, content types, degraded-store
 behavior at HTTP level).
+
+## What ships in P5 (shared library extraction finalized)
+
+The rendering core is now **one implementation for both tools** — the
+`snapshot-viewer` refactor completed the extraction started in P2:
+
+- **`@mdu/snapshot-render` is the single source of truth** for replica DOM,
+  flex re-layout, theme token injection and color/text-style resolution; a
+  grep proves render symbols (`hex`/`roleColor`-equivalent/`typeBaseName`/
+  `applyTextStyles`/…) live only in the package — the standalone page's
+  `viewer.js` keeps only tool chrome (tree/inspector/selection/file loading).
+  The package also ships the shared `normalize` pipeline (schema warnings, id
+  fill, hierarchy, geometry warning) via a `./normalize` subpath.
+- **No-build consumption**: `pnpm build` compiles the package source to an
+  IIFE bundle (`dist/snapshot-render.global.js`, `window.MduSnapshotRender`);
+  `snapshot-viewer/index.html` declares exactly that import. Tool-side, the
+  web client keeps bundling the TS sources through Vite; the server keeps its
+  DOM-free parser twin (plan §5.4) — parity between the two is asserted in
+  both directions by tests.
+- **Side-by-side check scripted**: the package's
+  `test/standaloneParity.spec.ts` boots the real snapshot-viewer page in
+  jsdom (vendored js-yaml + the built bundle) and renders
+  `fixtures/sample.yaml` in replica **and** flex modes against goldens that
+  were captured from the *original* `viewer.js` before the extraction — DOM
+  identity down to the serialized inline `style` attributes. Regenerating a
+  golden requires running `scripts/capture-golden.mjs` consciously (any diff
+  is a behavior change to review, never a silent reset). `test/normalize.spec.ts`
+  pins the normalization semantics that used to be duplicated.
+- **Workspace pinning**: `web` consumes `@mdu/snapshot-render@workspace:*`;
+  the standalone page consumes the built artifact by declared path
+  (`README.md` in that folder documents the one-time build + `--directory
+  Extra` serving). No vendored render code remains anywhere
+  (`vendor/` holds only third-party js-yaml).
+- **Cross-references**: both tools' READMEs now describe the shared package,
+  the `ui_snapshot_taken` ledger semantics and storage-key correlation.
 
 ## P0 ledger basis (runtime side)
 
@@ -334,10 +382,11 @@ Run these in the Unity editor; the config toggles live on `TelemetryConfig`
 
 Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — P0 (ledger +
 fixtures), P1 (tool skeleton, Influx source, session list), P2 (single-session
-timeline + snapshot replays), P3 (aggregate mode A heatmaps) and P4 (version
-modes B/C — fingerprint group tabs, ground-truth merge) are done; next up P5
-(switch the standalone `Extra/snapshot-viewer` over to the already-shared
-`@mdu/snapshot-render` package).
+timeline + snapshot replays), P3 (aggregate mode A heatmaps), P4 (version
+modes B/C — fingerprint group tabs, ground-truth merge) and P5 (the
+standalone `Extra/snapshot-viewer` now runs on the shared
+`@mdu/snapshot-render` package; parity locked) are done; next up P6 (polish:
+config UI, big-session perf pass, docs).
 
 > **P3 live-data note:** the two committed demo replays (and their live
 > InfluxDB counterparts) were captured *before* the P0 runtime change, so

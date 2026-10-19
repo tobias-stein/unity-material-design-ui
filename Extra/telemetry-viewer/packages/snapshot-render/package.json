@@ -4,11 +4,21 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Shared UI-snapshot rendering core (replica DOM + minimap) for the snapshot viewer and the telemetry viewer's playhead panel.",
+  "description": "Shared UI-snapshot rendering core (replica DOM + flex re-layout + minimap) for the standalone snapshot viewer and the telemetry viewer.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./normalize": "./src/normalize.ts"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "typescript": "^5.9.0"
+    "@types/jsdom": "^21.1.7",
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
   }
 }
