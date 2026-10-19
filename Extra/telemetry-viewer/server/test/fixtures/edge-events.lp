@@ -1,0 +1,10 @@
+session,session=0a11be11caf00d320a11be11caf00d32,type=start value=1i 1768471200000000000
+ui_event,session=0a11be11caf00d320a11be11caf00d32,type=view_open,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1768471201000000000
+ui_event,element=UIButton_Play,element_type=mdu.ui.Button,session=0a11be11caf00d320a11be11caf00d32,type=click,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1768471205000000000
+ui_event,element=UIToggle_Sound,element_type=mdu.ui.Toggle,session=0a11be11caf00d320a11be11caf00d32,type=toggle,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i,on=true 1768471208000000000
+ui_event,element=UIToggle_Sound,element_type=mdu.ui.Toggle,session=0a11be11caf00d320a11be11caf00d32,type=toggle,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i,on=false 1768471211000000000
+ui_event,element=UIToggle_Sound,element_type=mdu.ui.Toggle,session=0a11be11caf00d320a11be11caf00d32,type=close,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1768471220000000000
+ui_event,session=0a11be11caf00d320a11be11caf00d32,type=view_close,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i,dwell=123.456 1768471324000000000
+ui_event,session=0a11be11caf00d320a11be11caf00d32,type=view_open,view=UIDemoSettings,view_id=b1d2a3c4e5f60718283a4b5c6d7e8f90 value=1i 1768471325000000000
+ui_event,session=0a11be11caf00d320a11be11caf00d32,type=view_close,view=UIDemoSettings,view_id=b1d2a3c4e5f60718283a4b5c6d7e8f90 value=1i,dwell=0.5 1768471330000000000
+session,session=0a11be11caf00d320a11be11caf00d32,type=end value=1i 1768471331000000000

@@ -58,6 +58,13 @@ namespace mdu.ui.telemetry
         [Tooltip("Skip pooled (inactive, recycled) UI elements and their subtrees.")]
         public bool skipPooled = true;
 
+        [Header("Snapshot ledger")]
+        [Tooltip("Emit one ui_snapshot_taken point per successfully written snapshot file " +
+                 "(tags: session/view/view_id; fields: key/hash/nodes/width/height/owner/platform/screen). " +
+                 "Rides the same event pipeline as interaction events — it lands in pending-*.lp " +
+                 "when InfluxDB is down and in session-<id>.lp in file-archive mode. Requires eventsEnabled.")]
+        public bool snapshotLedger = true;
+
         [Header("Events (InfluxDB line protocol)")]
         [Tooltip("Record UI interaction and view dwell events with the session id.")]
         public bool eventsEnabled = true;

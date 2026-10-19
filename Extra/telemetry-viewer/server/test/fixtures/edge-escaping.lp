@@ -1,0 +1,4 @@
+ui_event,session=1e55capedf1f115e1e55capedf1f115e,type=view_open,view=My\sView\,Weird\=Name\s\\\s"Quoted",view_id=c8\\\=x\\\,y\sz000000000000000000000000000 value=1i 1769932800000000000
+ui_event,element=btn\s\\\sAdd\\\,Load\=1\\,element_type=mdu.ui.Fancy\sButton,session=1e55capedf1f115e1e55capedf1f115e,type=click,view=My\sView\,Weird\=Name\s\\\s"Quoted",view_id=c8\\\=x\\\,y\sz000000000000000000000000000 value=1i 1769932802000000000
+ui_event,element=Toggle\,c\=1\,a\={2}\,b\={3},element_type=mdu.ui.Toggle,session=1e55capedf1f115e1e55capedf1f115e,type=toggle,view=My\sView\,Weird\=Name\s\\\s"Quoted",view_id=c8\\\=x\\\,y\sz000000000000000000000000000 value=1i,on=true 1769932804000000000
+ui_event,session=1e55capedf1f115e1e55capedf1f115e,type=view_close,view=My\sView\,Weird\=Name\s\\\s"Quoted",view_id=c8\\\=x\\\,y\sz000000000000000000000000000 value=1i,dwell=4 1769932804000000000

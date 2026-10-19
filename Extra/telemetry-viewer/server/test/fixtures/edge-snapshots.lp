@@ -1,0 +1,6 @@
+session,session=3d07snap4e5566443d07snap4e556644,type=start value=1i 1775052840000000000
+ui_event,session=3d07snap4e5566443d07snap4e556644,type=view_open,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1775052899000000000
+ui_snapshot_taken,session=3d07snap4e5566443d07snap4e556644,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 key="snapshots/2026/04/01/UIDemoMainMenu-141500.yaml",hash="b64f7f24a6832f5bd3cebd6d15f1c9d6e00112233445566778899aabbccddeef",nodes=42i,width=1920,height=1080,owner="Unity-MaterialDesign-UI",platform="OSXEditor",screen="1920x1080" 1775052900000000000
+ui_event,element=UIPlay\sButton,element_type=mdu.ui.Button,session=3d07snap4e5566443d07snap4e556644,type=click,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1775052903000000000
+ui_snapshot_taken,session=3d07snap4e5566443d07snap4e556644,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 key="snapshots/2026/04/01/UIDemoMainMenu-141505.yaml.gz",hash="97c3a1d4f6a2b8c0e5d7f9a1b3c5e7d90000998877665544332211ffeeddccbb",nodes=42i,width=1920,height=1080,owner="Unity-MaterialDesign-UI",platform="OSXEditor",screen="1920x1080" 1775052905000000000
+ui_event,session=3d07snap4e5566443d07snap4e556644,type=view_close,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i,dwell=7 1775052906000000000

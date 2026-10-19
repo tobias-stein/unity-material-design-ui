@@ -1,0 +1,7 @@
+ui_event,session=2f99unres112233445566778899aa2f99,type=view_open,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1772366400000000000
+ui_event,element=anon:Canvas/Root/Actions/HBox[2],element_type=mdu.ui.Button,session=2f99unres112233445566778899aa2f99,type=click,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1772366403000000000
+ui_event,element=anon:Toggle\sList\=RareName,element_type=mdu.ui.Toggle,session=2f99unres112233445566778899aa2f99,type=toggle,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i,on=false 1772366405000000000
+ui_event,session=2f99unres112233445566778899aa2f99,type=view_open,view=UIDemoDialogNeverSnapped,view_id=d0e5f000000000000000000000000000 value=1i 1772366407000000000
+ui_event,element=UIConfirm_Button,element_type=mdu.ui.Button,session=2f99unres112233445566778899aa2f99,type=click,view=UIDemoDialogNeverSnapped,view_id=d0e5f000000000000000000000000000 value=1i 1772366410000000000
+ui_event,element=UIClose_Button,element_type=mdu.ui.Button,session=2f99unres112233445566778899aa2f99,type=close,view=UIDemoDialogNeverSnapped,view_id=d0e5f000000000000000000000000000 value=1i 1772366412000000000
+ui_event,session=2f99unres112233445566778899aa2f99,type=view_close,view=UIDemoDialogNeverSnapped,view_id=d0e5f000000000000000000000000000 value=1i,dwell=5 1772366412000000000

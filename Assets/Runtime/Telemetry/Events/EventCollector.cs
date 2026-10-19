@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using UnityEngine;
 
 namespace mdu.ui.telemetry.events
@@ -209,6 +210,69 @@ namespace mdu.ui.telemetry.events
             {
                 Debug.LogException(ex);
             }
+        }
+
+        /// <summary>
+        /// Records one <see cref="Measurements.UiSnapshotTaken"/> ledger point for a
+        /// snapshot file that has been successfully written (the exporter calls this
+        /// after the file write returned, so a recorded point always references
+        /// bytes on disk). Rides the same sink as interaction events — it lands in
+        /// <c>pending-*.lp</c> while InfluxDB is unreachable and in
+        /// <c>session-&lt;id&gt;.lp</c> in file-archive mode. Gated by
+        /// Telemetry.config.snapshotLedger. Never throws.
+        /// Must be called on the main thread (Unity API in the sinks).
+        /// </summary>
+        public void snapshotTaken(SnapshotTakenInfo info)
+        {
+            try
+            {
+                var config = Telemetry.config;
+                if (!config.eventsEnabled || !config.snapshotLedger)
+                {
+                    return;
+                }
+
+                if (info == null ||
+                    string.IsNullOrEmpty(info.storageKey) ||
+                    string.IsNullOrEmpty(info.fileHash) ||
+                    info.nodeCount < 0)
+                {
+                    return;
+                }
+
+                activeSink.write(new TelemetryEvent
+                {
+                    measurement = Measurements.UiSnapshotTaken,
+                    timestampNs = (DateTime.UtcNow - DateTime.UnixEpoch).Ticks * 100,
+                    sessionId = string.IsNullOrEmpty(info.sessionId) ? _sessionId : info.sessionId,
+                    viewId = info.viewId,
+                    viewName = info.viewName,
+                    storageKey = info.storageKey,
+                    fileHash = info.fileHash,
+                    nodeCount = info.nodeCount,
+                    screenWidth = info.screenWidth,
+                    screenHeight = info.screenHeight,
+                    screen = formatScreen(info.screenWidth, info.screenHeight),
+                    owner = info.owner,
+                    platform = info.platform
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static string formatScreen(float width, float height)
+        {
+            if (width <= 0f || height <= 0f)
+            {
+                return null;
+            }
+
+            const string format = "0.#";
+            return width.ToString(format, CultureInfo.InvariantCulture) + "x" +
+                   height.ToString(format, CultureInfo.InvariantCulture);
         }
 
         private void writeEvent(string measurement, string type, DateTime now,
