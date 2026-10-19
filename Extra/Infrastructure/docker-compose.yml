@@ -1,5 +1,5 @@
 # InfluxDB v2 for Unity-MaterialDesign-UI telemetry, plus the telemetry-viewer
-# tool service (placeholder page in P0, real tool from P1 on http://localhost:8087).
+# tool (Fastify API + web client on http://localhost:8087).
 #
 #   docker compose up -d      # start  (Influx UI: http://localhost:8086, user: admin / adminadmin;
 #                             #         viewer: http://localhost:8087)
@@ -18,15 +18,28 @@
 
 services:
   telemetry-viewer:
-    # P0 phase stub: static placeholder until the real viewer image lands (P1,
-    # plan ui-telemetry-viewer.md). Port 8087 is the tool's advertised port.
-    image: nginx:1.27-alpine
+    # Real tool (from P1 on, plan ui-telemetry-viewer.md §11/P1): Fastify API +
+    # static web client on one port. Strictly read-only toward InfluxDB.
+    build: ../telemetry-viewer
+    image: mdu/telemetry-viewer:latest
     container_name: mdu-ui-telemetry-viewer
     restart: unless-stopped
     ports:
-      - "8087:80"
-    volumes:
-      - ../telemetry-viewer/placeholder:/usr/share/nginx/html:ro
+      - "8087:8087"
+    depends_on:
+      influxdb:
+        condition: service_started
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: mdu
+      INFLUX_BUCKET: ui
+      INFLUX_TOKEN: mdu-local-dev-token-0123456789abcdef
+      LOG_LEVEL: info
+      # Optional .lp file source — mount a host directory and point LP_ROOT (or
+      # SNAPSHOT_ROOT for snapshot files) at it, e.g.:
+      #   - <your telemetry dir>:/data:ro
+      #   - LP_ROOT: /data/Telemetry/events
+      #   - SNAPSHOT_ROOT: /data/Telemetry/snapshots
 
   influxdb:
     image: influxdb:2.7

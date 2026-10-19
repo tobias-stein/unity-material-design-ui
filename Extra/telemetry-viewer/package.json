@@ -1,0 +1,12 @@
+{
+  "name": "telemetry-viewer-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "packageManager": "pnpm@12.14.0",
+  "scripts": {
+    "build": "corepack pnpm -r --filter ./server --filter @mdu/telemetry-viewer-web build",
+    "test": "corepack pnpm -r --filter ./server test",
+    "dev": "corepack pnpm --filter @mdu/telemetry-viewer-server dev"
+  }
+}
