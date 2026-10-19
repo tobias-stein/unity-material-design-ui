@@ -15,7 +15,8 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
         <h1>UI Telemetry Viewer</h1>
-        <span class="phase-chip">P2 · timeline</span>
+        <span class="phase-chip">P3 · aggregate</span>
+        <a class="btn small" href="#/aggregate">Aggregate view →</a>
       </div>
       <div id="source-status" class="source-status" role="status"></div>
     </header>

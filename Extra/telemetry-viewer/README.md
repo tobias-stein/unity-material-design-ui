@@ -105,6 +105,59 @@ beside a live UI replica:
   `ui_snapshot_taken` ledger anchors, `--anchors 0` for the
   unresolved-lane stress) for fps verification without a Unity run.
 
+## What ships in P3 (aggregate mode A — common-only)
+
+`#/aggregate` — the cross-session heatmap of which UI elements get used most:
+
+- **Period picker**: sessions multi-select (searchable checkboxes) OR a UTC
+  `from`/`to` range — the server accepts one or the other, never both.
+- **Canonical element keys** (plan §6.2 — `server/src/core/canonical.ts`):
+  cross-session identity is the element **tree path**, not the unstable
+  runtime `_id`:
+  `canonicalKey = viewKey › <path segments…> › elementType` — `viewKey` is
+  the snapshot's `view.type` with a trailing `(Clone)` stripped; each path
+  segment is the node `name` when meaningful, else the plan's
+  `{kind}:{type}[{siblingIndex}]` fallback. The element node itself ends the
+  path so same-typed siblings stay separable. Confidence:
+  `exact` (all named segments) vs `approximate` (any fallback/anonymous
+  segment). Events with no resolvable snapshot node are not graded — they
+  surface in the dedicated **unresolved** bucket, grouped by view +
+  `element_type` only.
+- **Intersection counting** (mode A, §7 a): interactions
+  (`click`/`toggle`/`close`/`backdrop_click`) resolve via the exact §6.1
+  playhead rule (latest anchor of the same `view_id` at or before the event)
+  and then id-join onto the parsed snapshot node. Structure fingerprints
+  (`server/src/core/fingerprint.ts`) cluster each viewKey's snapshots into
+  versions; mode A counts only keys present in **all** versions and hides
+  the rest — quantified, not lost.
+- **Divergence badge**: `N divergent viewKeys — M keys hidden` plus the
+  "switch to version split →" entry point; absent when nothing diverges.
+  The split itself (modes B/C) ships with P4 — the notice states that
+  honestly.
+- **Template snapshots** (§7 A): per viewKey, the latest snapshot whose
+  structure covers the whole intersection (timestamp, hash-tiebreak — a pure
+  function of data content, so repeated queries render identically). The
+  payload carries the parsed template; the client paints per-key heat
+  overlays through the shared renderer's `[data-node-id]` mapping.
+- **Heat overlays + ranked lists**: per-view tabs render the replica at
+  default-light tokens (`@mdu/snapshot-render`), with stepwise-alpha
+  intensity fill for every counted element, a `Top 5` mode, and click-to-
+  highlight from the ranked side list. The "All views" tab ranks global
+  hotspots across viewKeys. **Captured themes are ignored** (§3.8) — a
+  dark-seeded snapshot renders as the hardcoded light Material-3 baseline.
+- **CSV export** (`GET /api/aggregate/export.csv`, same selection rules):
+  header exactly `canonicalKey,view,viewId,element,count,dimensions`,
+  RFC-4180 quoting (commas/quotes/newline fields escaped; `dimensions` =
+  template node rect as `WxH`).
+- **Server routes**: `GET /api/aggregate` with
+  `sessions=<id,id,…>` XOR `from`/`to` (+ optional `mode=a`). New error
+  codes: `AGGREGATE_SELECTION_MISSING` / `_INVALID` / `_TOO_LARGE`,
+  `AGGREGATE_UNKNOWN_SESSIONS`, `AGGREGATE_MODE_NOT_AVAILABLE` (mode b/c →
+  400 with a P4 pointer until they ship). Snapshot resolution problems
+  degrade per-artifact into `warnings` with unresolved `snapshot-unavailable`
+  reasons — one missing file never turns the aggregate into a 500.
+
+
 ## Env vars (server)
 
 | Var | Default | Meaning |
@@ -142,7 +195,7 @@ tests run against (`./scripts/export-fixtures.sh` regenerates):
 
 ```bash
 cd Extra/telemetry-viewer
-corepack pnpm --filter @mdu/telemetry-viewer-server test     # 62 tests
+corepack pnpm --filter @mdu/telemetry-viewer-server test     # 89 tests
 corepack pnpm test                                          # whole workspace
 ```
 
@@ -150,6 +203,17 @@ P2 adds `timeline.spec.ts` (correlation "latest ≤ t", unresolved-never-dropped
 event-count invariance, dwell spans, synthetic 5k frame) and
 `snapshots.spec.ts` (gz sniffing, geometry-warning parity with the standalone
 viewer, id normalization, `SnapshotService` store probing + LRU).
+
+P3 adds `canonical.spec.ts` (path rules, exact/approximate grading,
+`(Clone)` stripping, root-only elements), `fingerprint.spec.ts`
+(same-tree-different-ids ⇒ same fingerprint; layout-only tweaks ⇒ no bump;
+union−intersection math; deterministic clustering), `aggregate.spec.ts`
+(**hand-computed totals** over a deterministic multi-session world: the same
+logical element in two sessions with different runtime `_id`s sums into one
+key; mode-A hiding; template stability across repeated queries; unresolved
+reason buckets; CSV quoting), and `aggregateApi.spec.ts` (route-level
+selection rules, uniform error envelopes, content types, degraded-store
+behavior at HTTP level).
 
 ## P0 ledger basis (runtime side)
 
@@ -198,8 +262,17 @@ Run these in the Unity editor; the config toggles live on `TelemetryConfig`
 ## Roadmap
 
 Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — P0 (ledger +
-fixtures), P1 (tool skeleton, Influx source, session list) and P2
-(single-session timeline + snapshot replays) are done; next up P3 (aggregate
-mode A heatmaps), P4 (version modes B/C), P5 (switch the standalone
-`Extra/snapshot-viewer` over to the already-shared `@mdu/snapshot-render`
-package).
+fixtures), P1 (tool skeleton, Influx source, session list), P2 (single-session
+timeline + snapshot replays) and P3 (aggregate mode A heatmaps) are done;
+next up P4 (version modes B/C — fingerprint group tabs, ground-truth merge),
+P5 (switch the standalone `Extra/snapshot-viewer` over to the already-shared
+`@mdu/snapshot-render` package).
+
+> **P3 live-data note:** the two committed demo replays (and their live
+> InfluxDB counterparts) were captured *before* the P0 runtime change, so
+> they hold no `ui_snapshot_taken` points — aggregating them is honestly
+> 100 % `unresolved` (see the totals in this README's flow). The canonical
+> join itself is unit-locked against the deterministic snapshot-store world
+> in `server/test/aggregateWorld.ts` (`aggregate.spec.ts`), and any session
+> captured with the current runtime (≥ P0) lands ledger points, so replaying
+> the demo scene with snapshots (F9) populates the heatmap end-to-end.

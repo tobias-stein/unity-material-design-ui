@@ -182,8 +182,13 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
   };
 }
 
-/** Index of the latest anchor with `timestampNs <= t`, or null when absent. */
-function findPriorAnchor(
+/**
+ * Index of the latest anchor with `timestampNs <= t`, or null when absent.
+ * Shared rule (§6.1 "latest ≤ t, same view_id"): the timeline playhead and
+ * the aggregate correlate with the very same lookup, so the two read models
+ * can never drift apart.
+ */
+export function findPriorAnchor(
   anchors: readonly SnapshotLedgerEntry[],
   tNs: bigint,
 ): number | null {

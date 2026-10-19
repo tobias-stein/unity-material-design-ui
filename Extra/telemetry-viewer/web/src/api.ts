@@ -216,7 +216,89 @@ export const api = {
     request(`/api/sessions/${encodeURIComponent(id)}/timeline`),
   snapshot: (id: string, ref: string): Promise<SnapshotResponse> =>
     request(`/api/snapshots/${encodeURIComponent(id)}/${encodeURIComponent(ref)}`),
+  aggregate: (query: AggregateQuery): Promise<AggregateResponse> =>
+    request(`/api/aggregate${aggregateParams(query)}`),
 };
+
+/** URL (+urlencoded query) for the CSV export button's download link. */
+export function aggregateCsvUrl(query: AggregateQuery): string {
+  return `/api/aggregate/export.csv${aggregateParams(query)}`;
+}
+
+function aggregateParams(query: AggregateQuery): string {
+  const params = new URLSearchParams();
+  if (query.sessions !== undefined && query.sessions.length > 0) params.set("sessions", query.sessions.join(","));
+  if (query.from !== undefined) params.set("from", query.from);
+  if (query.to !== undefined) params.set("to", query.to);
+  const suffix = params.toString();
+  return suffix === "" ? "" : `?${suffix}`;
+}
+
+export interface AggregateQuery {
+  /** Explicit session ids (XOR range). */
+  sessions?: string[];
+  /** UTC range bounds (dates as `YYYY-MM-DD`); inclusive. */
+  from?: string;
+  to?: string;
+}
+
+export interface AggregateTotalsDto {
+  sessions: number;
+  interactionEvents: number;
+  resolvedEvents: number;
+  hiddenEvents: number;
+  unresolvedEvents: number;
+  viewKeys: number;
+  divergentViewKeys: number;
+  hiddenKeys: number;
+}
+
+export interface AggregateCountDto {
+  key: string;
+  count: number;
+  elementType: string | null;
+  leafLabel: string;
+  confidence: "exact" | "approximate";
+  templateNodeId: string | null;
+  dimensions: { width: number | null; height: number | null } | null;
+}
+
+export interface AggregateViewDto {
+  viewKey: string;
+  divergent: boolean;
+  versionCount: number;
+  intersectionKeyCount: number;
+  hiddenKeyCount: number;
+  hiddenEventCount: number;
+  counts: AggregateCountDto[];
+  template: {
+    hash: string | null;
+    storageKey: string | null;
+    viewId: string | null;
+    parsed: ParsedSnapshotDto;
+  } | null;
+}
+
+export interface AggregateUnresolvedRowDto {
+  view: string;
+  elementType: string;
+  count: number;
+  reasons: Record<string, number>;
+}
+
+export interface AggregateResponse {
+  selection: {
+    mode: "a";
+    sessions: SessionDto[];
+    fromMs: number | null;
+    toMs: number | null;
+    status: string;
+  };
+  totals: AggregateTotalsDto;
+  views: AggregateViewDto[];
+  unresolved: AggregateUnresolvedRowDto[];
+  warnings: string[];
+}
 
 export interface SessionsQuery {
   q?: string;

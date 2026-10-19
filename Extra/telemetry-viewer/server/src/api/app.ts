@@ -8,15 +8,23 @@ import path from "node:path";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { ToolConfig } from "../config.js";
-import type { Session, SourceProvider } from "../domain.js";
+import type { RawEvent, Session, SourceProvider } from "../domain.js";
 import { buildSessionCatalog, filterSessions, type ProviderRun, type SessionCatalog } from "../core/sessionCatalog.js";
 import { buildTimelineFrame, type TimelineFrame } from "../core/timeline.js";
+import {
+  buildAggregate,
+  aggregateToCsv,
+  type AggregateResult,
+  type SnapshotLoader,
+} from "../core/heatmap.js";
 import { FluxInfluxSource } from "../sources/influx.js";
 import { LpFileListSource } from "../sources/lpFiles.js";
 import { LocalFsSnapshotStore } from "../storage/snapshotStore.js";
 import { SnapshotService, SnapshotResolutionError } from "../snapshots/snapshotService.js";
+import type { ParsedSnapshot } from "../snapshots/parse.js";
 import { registerErrorHandlers, ApiError, errorBody } from "./errorHandling.js";
 import { nsToMs, parseTimeParam, parseRangeQuery } from "./queryParams.js";
+import { parseAggregateQuery, MAX_AGGREGATE_SESSIONS, type AggregateQuery } from "./aggregateQuery.js";
 
 /** Parsed-snapshot resolution is shared across timeline playhead requests. */
 function snapshotReference(
@@ -220,6 +228,102 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       throw error;
     }
   });
+
+  /* ----------------------------------------------------------- aggregate (P3) */
+
+  const snapshotLoader: SnapshotLoader = async (entry) => {
+    try {
+      const resolved = await snapshotService.resolve({ key: entry.key, hash: entry.hash });
+      return { parsed: resolved.parsed, errorCode: null };
+    } catch (error) {
+      // Aggregate reads degrade per-snapshot with warnings — never 500 because
+      // one artifact went missing while the events remain countable.
+      if (error instanceof SnapshotResolutionError) {
+        return { parsed: null, errorCode: error.code };
+      }
+      return { parsed: null, errorCode: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
+  /** Shared selection resolution for `/api/aggregate` and its CSV export. */
+  const resolveAggregateSelection = async (
+    catalogResult: SessionCatalog,
+    query: AggregateQuery,
+  ): Promise<{ sessions: Session[]; eventsBySession: Map<string, RawEvent[]> }> => {
+    let selected: Session[];
+    if (query.sessions.length > 0) {
+      selected = [];
+      const missing: string[] = [];
+      for (const id of query.sessions) {
+        const session = catalogResult.sessions.find((entry) => entry.id === id);
+        if (session === undefined) missing.push(id);
+        else selected.push(session);
+      }
+      if (missing.length > 0) {
+        throw new ApiError(
+          "AGGREGATE_UNKNOWN_SESSIONS",
+          `Unknown session id(s) in the selection: ${missing.join(", ")}`,
+          400,
+          `available: ${catalogResult.sessions.map((entry) => entry.id).join(", ")}`,
+        );
+      }
+    } else {
+      selected = filterSessions(catalogResult.sessions, {
+        fromMs: query.fromMs,
+        toMs: query.toMs,
+        limit: MAX_AGGREGATE_SESSIONS,
+      });
+    }
+
+    // Events ride each session's own producing provider run (files win by
+    // identity, §6.1) — never double-counted across sources.
+    const eventsBySession = new Map<string, RawEvent[]>();
+    for (const session of selected) {
+      const producingRun = catalogResult.runs.find((run) => run.id === session.origin);
+      eventsBySession.set(
+        session.id,
+        (producingRun?.result?.events ?? []).filter((event) => event.tags.session === session.id),
+      );
+    }
+    return { sessions: selected, eventsBySession };
+  };
+
+  const runAggregate = async (rawQuery: Record<string, unknown>): Promise<{
+    selection: AggregateSelectionDto;
+    result: AggregateResult;
+  }> => {
+    const catalogResult = await catalogGuard(catalog());
+    const query = parseAggregateQuery(rawQuery);
+    const selection = await resolveAggregateSelection(catalogResult, query);
+    const result = await buildAggregate({
+      sessions: selection.sessions,
+      eventsBySession: selection.eventsBySession,
+      loadSnapshot: snapshotLoader,
+    });
+    return {
+      selection: {
+        mode: query.mode,
+        sessions: selection.sessions.map(toSessionDto),
+        fromMs: query.fromMs ?? null,
+        toMs: query.toMs ?? null,
+        status: catalogResult.status,
+      },
+      result,
+    };
+  };
+
+  app.get("/api/aggregate", { logLevel: "error" }, async (request) =>
+    toAggregateResponseDto(await runAggregate(request.query as Record<string, unknown>)),
+  );
+
+  app.get("/api/aggregate/export.csv", { logLevel: "error" }, async (request, reply) => {
+    const { result } = await runAggregate(request.query as Record<string, unknown>);
+    reply
+      .type("text/csv; charset=utf-8")
+      .header("content-disposition", `attachment; filename="aggregate-common-mode-a.csv"`)
+      .send(aggregateToCsv(result));
+  });
+
 
   registerErrorHandlers(app, { spaIndexFile });
   return app;
@@ -434,5 +538,81 @@ export function toTimelineDto(_catalogResult: SessionCatalog, frame: TimelineFra
     events: frame.events,
     viewSpans: frame.viewSpans,
     snapshots: frame.snapshots,
+  };
+}
+
+/* ------------------------------------------------------------------ aggregate */
+
+export interface AggregateSelectionDto {
+  mode: "a";
+  sessions: SessionDto[];
+  fromMs: number | null;
+  toMs: number | null;
+  status: "ok" | "degraded" | "unavailable";
+}
+
+export interface AggregateCountDto {
+  key: string;
+  count: number;
+  elementType: string | null;
+  leafLabel: string;
+  confidence: "exact" | "approximate";
+  templateNodeId: string | null;
+  dimensions: { width: number | null; height: number | null } | null;
+}
+
+export interface AggregateViewDto {
+  viewKey: string;
+  divergent: boolean;
+  versionCount: number;
+  intersectionKeyCount: number;
+  hiddenKeyCount: number;
+  hiddenEventCount: number;
+  counts: AggregateCountDto[];
+  template: {
+    hash: string | null;
+    storageKey: string | null;
+    viewId: string | null;
+    /** Client-ready parsed snapshot (snapshot-render consumes it directly). */
+    parsed: ParsedSnapshot;
+  } | null;
+}
+
+export interface AggregateResponseDto {
+  selection: AggregateSelectionDto;
+  totals: AggregateResult["totals"];
+  views: AggregateViewDto[];
+  unresolved: AggregateResult["unresolved"];
+  warnings: string[];
+}
+
+export function toAggregateResponseDto(payload: {
+  selection: AggregateSelectionDto;
+  result: AggregateResult;
+}): AggregateResponseDto {
+  const { selection, result } = payload;
+  return {
+    selection,
+    totals: result.totals,
+    views: result.views.map((view) => ({
+      viewKey: view.viewKey,
+      divergent: view.divergent,
+      versionCount: view.versionCount,
+      intersectionKeyCount: view.intersectionKeyCount,
+      hiddenKeyCount: view.hiddenKeyCount,
+      hiddenEventCount: view.hiddenEventCount,
+      counts: view.counts,
+      template:
+        view.template === null
+          ? null
+          : {
+              hash: view.template.hash,
+              storageKey: view.template.storageKey,
+              viewId: view.template.viewId,
+              parsed: view.template.parsed,
+            },
+    })),
+    unresolved: result.unresolved,
+    warnings: result.warnings,
   };
 }

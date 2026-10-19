@@ -83,6 +83,9 @@ function createNodeElement(
   const el = document.createElement("div");
   const slugType = type.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
   el.className = `node kind-${node.kind || "layout"} type-${slugType}`;
+  // Node id for tool-side overlays (aggregate heatmaps key by canonical
+  // element → template node id). Harmless for the standalone viewer.
+  el.dataset.nodeId = node.id;
 
   if (node.rect) {
     el.style.left = `${node.rect.x ?? 0}px`;

@@ -11,10 +11,11 @@
 import "./styles.css";
 import { renderSessionsView, type SessionsView } from "./views/sessions.js";
 import { renderTimelineView, type TimelineViewHandle } from "./views/timeline.js";
+import { renderAggregateView, type AggregateViewHandle } from "./views/aggregate.js";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
-type ViewHandle = SessionsView | TimelineViewHandle;
+type ViewHandle = SessionsView | TimelineViewHandle | AggregateViewHandle;
 
 let mounted: ViewHandle | null = null;
 /** Bumped on every route change; a slow async mount that loses this must die. */
@@ -34,6 +35,16 @@ async function mount(): Promise<void> {
     // Race guard: if another route took over while the timeline was loading,
     // tear the stale view down immediately instead of mounting it.
     const view = await renderTimelineView(app, sessionId);
+    if (token !== mountToken) {
+      view.destroy();
+      return;
+    }
+    mounted = view;
+    return;
+  }
+
+  if (hash.startsWith("#/aggregate")) {
+    const view = await renderAggregateView(app);
     if (token !== mountToken) {
       view.destroy();
       return;
