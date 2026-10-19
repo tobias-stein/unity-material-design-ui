@@ -17,6 +17,7 @@ import {
   type AggregateResult,
   type SnapshotLoader,
 } from "../core/heatmap.js";
+import { AggregateGroupError } from "../core/versioning.js";
 import { FluxInfluxSource } from "../sources/influx.js";
 import { LpFileListSource } from "../sources/lpFiles.js";
 import { LocalFsSnapshotStore } from "../storage/snapshotStore.js";
@@ -295,14 +296,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const catalogResult = await catalogGuard(catalog());
     const query = parseAggregateQuery(rawQuery);
     const selection = await resolveAggregateSelection(catalogResult, query);
-    const result = await buildAggregate({
-      sessions: selection.sessions,
-      eventsBySession: selection.eventsBySession,
-      loadSnapshot: snapshotLoader,
-    });
+    let result: AggregateResult;
+    try {
+      result = await buildAggregate({
+        sessions: selection.sessions,
+        eventsBySession: selection.eventsBySession,
+        loadSnapshot: snapshotLoader,
+        mode: query.mode,
+        groundTruth: query.groundTruth,
+      });
+    } catch (error) {
+      // A bad group pick is the caller's fault: honest 400, not a 500.
+      if (error instanceof AggregateGroupError) {
+        throw new ApiError(error.code, error.message, 400);
+      }
+      throw error;
+    }
     return {
       selection: {
         mode: query.mode,
+        group: query.group,
         sessions: selection.sessions.map(toSessionDto),
         fromMs: query.fromMs ?? null,
         toMs: query.toMs ?? null,
@@ -320,7 +333,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     const { result } = await runAggregate(request.query as Record<string, unknown>);
     reply
       .type("text/csv; charset=utf-8")
-      .header("content-disposition", `attachment; filename="aggregate-common-mode-a.csv"`)
+      .header("content-disposition", `attachment; filename="aggregate-mode-${result.mode}.csv"`)
       .send(aggregateToCsv(result));
   });
 
@@ -544,7 +557,9 @@ export function toTimelineDto(_catalogResult: SessionCatalog, frame: TimelineFra
 /* ------------------------------------------------------------------ aggregate */
 
 export interface AggregateSelectionDto {
-  mode: "a";
+  mode: "a" | "b" | "c";
+  /** The mode-C pick, echoed raw (`<viewKey>#<versionIndex>`). */
+  group: string | null;
   sessions: SessionDto[];
   fromMs: number | null;
   toMs: number | null;
@@ -559,6 +574,52 @@ export interface AggregateCountDto {
   confidence: "exact" | "approximate";
   templateNodeId: string | null;
   dimensions: { width: number | null; height: number | null } | null;
+}
+
+export interface AggregateVersionGroupDto {
+  /** Chronological ordinal within the viewKey. */
+  index: number;
+  /** `<viewKey>#<index>` — the mode-C `group=` param. */
+  groupId: string;
+  viewKey: string;
+  fingerprint: string;
+  snapshotCount: number;
+  keys: string[];
+  keyCount: number;
+  counts: AggregateCountDto[];
+  /** Own event count of this version (own template + own counts, §7 B). */
+  eventCount: number;
+  /** ⊕ new keys vs the earliest version. */
+  addedKeys: string[];
+  /** ⊖ keys missing vs the earliest version. */
+  removedKeys: string[];
+  template: {
+    hash: string | null;
+    storageKey: string | null;
+    viewId: string | null;
+  } | null;
+}
+
+export interface AggregateMergeDto {
+  groupId: string;
+  viewKey: string;
+  groundTruthIndex: number;
+  fingerprint: string;
+  rows: Array<
+    AggregateCountDto & {
+      ownCount: number;
+      folded: Array<{ key: string; versionIndex: number; count: number; matched: number; wildcards: number }>;
+    }
+  >;
+  unmatched: Array<{
+    key: string;
+    versionIndex: number;
+    count: number;
+    leafLabel: string;
+    elementType: string | null;
+  }>;
+  foldedEvents: number;
+  unmatchedEvents: number;
 }
 
 export interface AggregateViewDto {
@@ -576,6 +637,10 @@ export interface AggregateViewDto {
     /** Client-ready parsed snapshot (snapshot-render consumes it directly). */
     parsed: ParsedSnapshot;
   } | null;
+  /** Modes B/C only: per-version groups of a divergent viewKey. */
+  versions: AggregateVersionGroupDto[] | null;
+  /** Mode C only: the ground-truth merge of the picked viewKey. */
+  merge: AggregateMergeDto | null;
 }
 
 export interface AggregateResponseDto {
@@ -611,6 +676,8 @@ export function toAggregateResponseDto(payload: {
               viewId: view.template.viewId,
               parsed: view.template.parsed,
             },
+      versions: view.versions,
+      merge: view.merge,
     })),
     unresolved: result.unresolved,
     warnings: result.warnings,

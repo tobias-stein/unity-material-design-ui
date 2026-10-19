@@ -2,10 +2,19 @@
 import { ApiError } from "./errorHandling.js";
 import { parseTimeParam } from "./queryParams.js";
 
+/** Regex of a mode-C ground-truth pick: `<viewKey>#<versionIndex>`. */
+const GROUP_PATTERN = /^([^#]+)#(\d+)$/u;
+
 /** Aggregate selection caps: a local tool, but payload/parse work is real. */
 export const MAX_AGGREGATE_SESSIONS = 100;
 
-export type AggregateMode = "a";
+export type AggregateMode = "a" | "b" | "c";
+
+/** A mode-C pick parsed *syntactically*; existence is checked against data. */
+export interface GroundTruthPick {
+  viewKey: string;
+  versionIndex: number;
+}
 
 export interface AggregateQuery {
   /** Explicit session ids (mutually exclusive with the UTC range). */
@@ -14,6 +23,10 @@ export interface AggregateQuery {
   fromMs: number | undefined;
   toMs: number | undefined;
   mode: AggregateMode;
+  /** Mode C ground-truth pick (`group=<viewKey>#<versionIndex>`). */
+  groundTruth: GroundTruthPick | null;
+  /** Raw group string for echo in the selection DTO. */
+  group: string | null;
 }
 
 export function parseAggregateQuery(query: Record<string, unknown>): AggregateQuery {
@@ -59,17 +72,46 @@ export function parseAggregateQuery(query: Record<string, unknown>): AggregateQu
 
   const modeRaw = typeof query.mode === "string" ? query.mode.trim() : "";
   let mode: AggregateMode = "a";
-  if (modeRaw !== "" && modeRaw !== "a") {
+  if (modeRaw !== "" && modeRaw !== "a" && modeRaw !== "b" && modeRaw !== "c") {
     throw new ApiError(
       "AGGREGATE_MODE_NOT_AVAILABLE",
-      modeRaw === "b" || modeRaw === "c"
-        ? `Version mode "${modeRaw}" ships with P4 — mode A (common-only) is the only implemented surface.`
-        : `Unknown aggregate mode "${modeRaw}".`,
+      `Unknown aggregate mode "${modeRaw}" (available: a, b, c).`,
+      400,
+    );
+  }
+  if (modeRaw !== "") mode = modeRaw as AggregateMode;
+
+  const groupRaw = typeof query.group === "string" ? query.group.trim() : "";
+  let groundTruth: GroundTruthPick | null = null;
+  let group: string | null = null;
+  if (groupRaw !== "") {
+    if (mode !== "c") {
+      throw new ApiError(
+        "AGGREGATE_GROUP_MODE_MISMATCH",
+        '`group=` is the mode-C ground-truth pick (`<viewKey>#<versionIndex>`) — it needs `mode=c`.',
+        400,
+      );
+    }
+    const match = GROUP_PATTERN.exec(groupRaw);
+    if (match === null) {
+      throw new ApiError(
+        "AGGREGATE_GROUP_INVALID",
+        `Group pick must be \`<viewKey>#<versionIndex>\` (e.g. "mdu.ui.Dialog#1"); got: ${groupRaw}.`,
+        400,
+      );
+    }
+    groundTruth = { viewKey: match[1]!, versionIndex: Number.parseInt(match[2]!, 10) };
+    group = groupRaw;
+  }
+  if (mode === "c" && groupRaw === "") {
+    throw new ApiError(
+      "AGGREGATE_GROUP_MISSING",
+      'Mode c needs a `group=<viewKey>#<versionIndex>` pick — take the `groupId` of a version group from a mode-b response.',
       400,
     );
   }
 
-  return { sessions, fromMs, toMs, mode };
+  return { sessions, fromMs, toMs, mode, groundTruth, group };
 }
 
 function dedupe(values: string[]): string[] {

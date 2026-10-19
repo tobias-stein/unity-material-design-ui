@@ -230,6 +230,8 @@ function aggregateParams(query: AggregateQuery): string {
   if (query.sessions !== undefined && query.sessions.length > 0) params.set("sessions", query.sessions.join(","));
   if (query.from !== undefined) params.set("from", query.from);
   if (query.to !== undefined) params.set("to", query.to);
+  if (query.mode !== undefined && query.mode !== "a") params.set("mode", query.mode);
+  if (query.group !== undefined && query.group !== "") params.set("group", query.group);
   const suffix = params.toString();
   return suffix === "" ? "" : `?${suffix}`;
 }
@@ -240,17 +242,27 @@ export interface AggregateQuery {
   /** UTC range bounds (dates as `YYYY-MM-DD`); inclusive. */
   from?: string;
   to?: string;
+  /** Version mode (§7): a common-only (default), b version split, c merge. */
+  mode?: "a" | "b" | "c";
+  /** Mode C pick: `<viewKey>#<versionIndex>` from a mode-b response. */
+  group?: string;
 }
 
 export interface AggregateTotalsDto {
   sessions: number;
   interactionEvents: number;
   resolvedEvents: number;
+  /** Mode A: hidden events (keyed events outside the intersection). */
   hiddenEvents: number;
   unresolvedEvents: number;
   viewKeys: number;
   divergentViewKeys: number;
+  /** Distinct hidden keys across all viewKeys (mode-A badge's M; 0 in b/c). */
   hiddenKeys: number;
+  /** Mode C: events folded into picked ground truths. */
+  foldedEvents: number;
+  /** Mode C: events that stayed unmatched after the merge. */
+  unmatchedEvents: number;
 }
 
 export interface AggregateCountDto {
@@ -261,6 +273,56 @@ export interface AggregateCountDto {
   confidence: "exact" | "approximate";
   templateNodeId: string | null;
   dimensions: { width: number | null; height: number | null } | null;
+}
+
+export interface AggregateVersionGroupDto {
+  index: number;
+  /** `<viewKey>#<index>` — the mode-C `group=` param. */
+  groupId: string;
+  viewKey: string;
+  fingerprint: string;
+  snapshotCount: number;
+  keys: string[];
+  keyCount: number;
+  counts: AggregateCountDto[];
+  eventCount: number;
+  addedKeys: string[];
+  removedKeys: string[];
+  template: {
+    hash: string | null;
+    storageKey: string | null;
+    viewId: string | null;
+    parsed: ParsedSnapshotDto;
+  } | null;
+}
+
+export interface AggregateMergeRowDto extends AggregateCountDto {
+  ownCount: number;
+  folded: Array<{
+    key: string;
+    versionIndex: number;
+    count: number;
+    matched: number;
+    wildcards: number;
+  }>;
+}
+
+export interface AggregateMergeDto {
+  groupId: string;
+  viewKey: string;
+  groundTruthIndex: number;
+  fingerprint: string;
+  rows: AggregateMergeRowDto[];
+  /** (key, version) pairs that matched nothing — counted, never dropped. */
+  unmatched: Array<{
+    key: string;
+    versionIndex: number;
+    count: number;
+    leafLabel: string;
+    elementType: string | null;
+  }>;
+  foldedEvents: number;
+  unmatchedEvents: number;
 }
 
 export interface AggregateViewDto {
@@ -277,6 +339,10 @@ export interface AggregateViewDto {
     viewId: string | null;
     parsed: ParsedSnapshotDto;
   } | null;
+  /** Modes B/C: per-version groups of a divergent viewKey. */
+  versions: AggregateVersionGroupDto[] | null;
+  /** Mode C: the ground-truth merge of the picked viewKey. */
+  merge: AggregateMergeDto | null;
 }
 
 export interface AggregateUnresolvedRowDto {
@@ -288,7 +354,8 @@ export interface AggregateUnresolvedRowDto {
 
 export interface AggregateResponse {
   selection: {
-    mode: "a";
+    mode: "a" | "b" | "c";
+    group: string | null;
     sessions: SessionDto[];
     fromMs: number | null;
     toMs: number | null;

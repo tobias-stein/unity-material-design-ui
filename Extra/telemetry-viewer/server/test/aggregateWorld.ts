@@ -16,6 +16,8 @@ export const SESSION_A = "sess-alpha0000000000000000000000000";
 export const SESSION_B = "sess-beta00000000000000000000000000";
 export const SESSION_D1 = "sess-dlgone00000000000000000000000";
 export const SESSION_D2 = "sess-dlgtwo00000000000000000000000";
+export const SESSION_D3 = "sess-dlgthree00000000000000000000";
+export const SESSION_D4 = "sess-dlgfour000000000000000000000";
 
 /** ids the events carry per session (unstable runtime `_id`s by design). */
 export const ALIAS = {
@@ -27,6 +29,10 @@ export const ALIAS = {
   okD1: "okD1",
   okD2: "okD2",
   cancelD2: "cancelD2",
+  okD3: "okD3",
+  sndD3: "sndD3",
+  okD4: "okD4",
+  sndD4: "sndD4",
 } as const;
 
 /** Hand-computed canonical keys (the aggregate must land exactly here). */
@@ -36,6 +42,16 @@ export const KEY = {
   close: "mdu.ui.MainMenu › Close, all › mdu.ui.Button",
   ok: "mdu.ui.Dialog › OK › mdu.ui.Button",
   cancel: "mdu.ui.Dialog › Cancel › mdu.ui.Button",
+  /** Present in every Dialog version (the isView root carries a key too). */
+  dlgRoot: "mdu.ui.Dialog › mdu.ui.Dialog(Clone)",
+  /** Dialog v3: the OK button *moved* under a new container (tree path drift). */
+  okMoved: "mdu.ui.Dialog › Container › OK › mdu.ui.Button",
+  /** Dialog v3: the new container node's own key (LayoutGroup element). */
+  container: "mdu.ui.Dialog › Container › LayoutGroup",
+  /** Dialog v3: unnamed switch sibling → index-only fallback leaf. */
+  switch3: "mdu.ui.Dialog › ui:mdu.ui.Switch[1] › mdu.ui.Switch",
+  /** Dialog v4: the same switch now *named* (leaf wildcard vs v3's fallback). */
+  sound: "mdu.ui.Dialog › Sound › mdu.ui.Switch",
 } as const;
 
 interface NodeSpec {
@@ -99,11 +115,32 @@ const DIALOG_V2: NodeSpec[] = [
   { ref: ALIAS.cancelD2, parent: "dlgR2", name: "Cancel", type: "mdu.ui.Button", kind: "ui", siblingIndex: 1, rect: { x: 132, y: 160, width: 48, height: 40 } },
 ];
 
+/**
+ * P4 structures of the same logical Dialog:
+ * - v3 *moves* OK under a new container and adds an unnamed switch (the
+ *   index-only fallback leaf whose sibling drifts against v4's name);
+ * - v4 *renames* that switch to "Sound" and puts OK back at the root.
+ */
+const DIALOG_V3: NodeSpec[] = [
+  { ref: "dlgR3", name: "Dialog", type: "mdu.ui.Dialog(Clone)", kind: "ui", isView: true, siblingIndex: 0, rect: { x: 100, y: 100, width: 400, height: 220 } },
+  { ref: "dlgC3", parent: "dlgR3", name: "Container", type: "LayoutGroup", kind: "layout", siblingIndex: 0, rect: { x: 100, y: 140, width: 400, height: 180 } },
+  { ref: ALIAS.okD3, parent: "dlgC3", name: "OK", type: "mdu.ui.Button", kind: "ui", siblingIndex: 0, rect: { x: 110, y: 210, width: 48, height: 40 } },
+  { ref: ALIAS.sndD3, parent: "dlgR3", type: "mdu.ui.Switch", kind: "ui", siblingIndex: 1, rect: { x: 100, y: 120, width: 48, height: 28 } },
+];
+
+const DIALOG_V4: NodeSpec[] = [
+  { ref: "dlgR4", name: "Dialog", type: "mdu.ui.Dialog(Clone)", kind: "ui", isView: true, siblingIndex: 0, rect: { x: 100, y: 100, width: 400, height: 220 } },
+  { ref: ALIAS.okD4, parent: "dlgR4", name: "OK", type: "mdu.ui.Button", kind: "ui", siblingIndex: 0, rect: { x: 160, y: 160, width: 48, height: 40 } },
+  { ref: ALIAS.sndD4, parent: "dlgR4", name: "Sound", type: "mdu.ui.Switch", kind: "ui", siblingIndex: 1, rect: { x: 100, y: 120, width: 48, height: 28 } },
+];
+
 const SNAPSHOTS: SnapshotSpec[] = [
   { file: "UIDemoMainMenu-141500.yaml", tsMs: 1_000, viewId: "vid-main-1", viewName: "UIDemoMainMenu(Clone)", viewType: "mdu.ui.MainMenu(Clone)", nodes: MAIN_NODES_A },
   { file: "UIDemoMainMenu-141459.yaml", tsMs: 900, viewId: "vid-main-2", viewName: "UIDemoMainMenu(Clone)", viewType: "mdu.ui.MainMenu(Clone)", nodes: MAIN_NODES_B },
   { file: "Dialog-152000.yaml", tsMs: 2_000, viewId: "vid-dlg-1", viewName: "Dialog(Clone)", viewType: "mdu.ui.Dialog(Clone)", nodes: DIALOG_V1 },
   { file: "Dialog-153000.yaml", tsMs: 3_000, viewId: "vid-dlg-2", viewName: "Dialog(Clone)", viewType: "mdu.ui.Dialog(Clone)", nodes: DIALOG_V2 },
+  { file: "Dialog-154000.yaml", tsMs: 4_000, viewId: "vid-dlg-3", viewName: "Dialog(Clone)", viewType: "mdu.ui.Dialog(Clone)", nodes: DIALOG_V3 },
+  { file: "Dialog-155000.yaml", tsMs: 5_000, viewId: "vid-dlg-4", viewName: "Dialog(Clone)", viewType: "mdu.ui.Dialog(Clone)", nodes: DIALOG_V4 },
   // Ledger-recorded but never written: the snapshot-unavailable path.
   { file: "UIDemoMainMenu-141505.yaml.gz", tsMs: 3_000, viewId: "vid-main-1", viewName: "UIDemoMainMenu(Clone)", viewType: "mdu.ui.MainMenu(Clone)", nodes: MAIN_NODES_A, write: false },
 ];
@@ -139,6 +176,17 @@ const EVENTS: EventSpec[] = [
   { session: SESSION_D2, tMs: 3_400, type: "click", element: ALIAS.okD2, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-2" },
   { session: SESSION_D2, tMs: 3_500, type: "click", element: ALIAS.cancelD2, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-2" },
   { session: SESSION_D2, tMs: 3_600, type: "click", element: ALIAS.cancelD2, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-2" },
+  // dialog v3: OK (moved under the container) ×2, unnamed switch ×1
+  { session: SESSION_D3, tMs: 4_100, type: "view_open", view: "Dialog(Clone)", viewId: "vid-dlg-3" },
+  { session: SESSION_D3, tMs: 4_150, type: "click", element: ALIAS.okD3, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-3" },
+  { session: SESSION_D3, tMs: 4_250, type: "click", element: ALIAS.okD3, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-3" },
+  { session: SESSION_D3, tMs: 4_300, type: "toggle", element: ALIAS.sndD3, elementType: "mdu.ui.Switch", on: true, view: "Dialog(Clone)", viewId: "vid-dlg-3" },
+  // dialog v4: OK ×3, Sound switch ×1
+  { session: SESSION_D4, tMs: 5_100, type: "view_open", view: "Dialog(Clone)", viewId: "vid-dlg-4" },
+  { session: SESSION_D4, tMs: 5_200, type: "click", element: ALIAS.okD4, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-4" },
+  { session: SESSION_D4, tMs: 5_300, type: "click", element: ALIAS.okD4, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-4" },
+  { session: SESSION_D4, tMs: 5_400, type: "click", element: ALIAS.okD4, elementType: "mdu.ui.Button", view: "Dialog(Clone)", viewId: "vid-dlg-4" },
+  { session: SESSION_D4, tMs: 5_500, type: "toggle", element: ALIAS.sndD4, elementType: "mdu.ui.Switch", on: true, view: "Dialog(Clone)", viewId: "vid-dlg-4" },
 ];
 
 const BASE_EPOCH_MS = 1_700_000_000_000;
@@ -194,9 +242,17 @@ let lpCache: string | null = null;
 
 export function lpText(): string {
   if (lpCache !== null) return lpCache;
+  const startOffsets: Record<string, number> = {
+    [SESSION_A]: 500,
+    [SESSION_B]: 500,
+    [SESSION_D1]: 1_500,
+    [SESSION_D2]: 2_500,
+    [SESSION_D3]: 3_500,
+    [SESSION_D4]: 4_500,
+  };
   const lines: string[] = [];
-  for (const session of [SESSION_A, SESSION_B, SESSION_D1, SESSION_D2]) {
-    const startMs = BASE_EPOCH_MS + (session === SESSION_A ? 500 : session === SESSION_B ? 500 : session === SESSION_D1 ? 1_500 : 2_500);
+  for (const session of [SESSION_A, SESSION_B, SESSION_D1, SESSION_D2, SESSION_D3, SESSION_D4]) {
+    const startMs = BASE_EPOCH_MS + (startOffsets[session] ?? 0);
     lines.push(`session,session=${session},type=start value=1i ${msNs(startMs)}`);
     for (const event of EVENTS) {
       if (event.session !== session) continue;
@@ -234,6 +290,8 @@ function specTargets(spec: SnapshotSpec): string {
   if (spec.viewId === "vid-main-2") return SESSION_B;
   if (spec.viewId === "vid-dlg-1") return SESSION_D1;
   if (spec.viewId === "vid-dlg-2") return SESSION_D2;
+  if (spec.viewId === "vid-dlg-3") return SESSION_D3;
+  if (spec.viewId === "vid-dlg-4") return SESSION_D4;
   throw new Error(`unmapped snapshot spec ${spec.file}`);
 }
 

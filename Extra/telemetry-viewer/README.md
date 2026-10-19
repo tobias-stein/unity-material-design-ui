@@ -132,8 +132,8 @@ beside a live UI replica:
   the rest — quantified, not lost.
 - **Divergence badge**: `N divergent viewKeys — M keys hidden` plus the
   "switch to version split →" entry point; absent when nothing diverges.
-  The split itself (modes B/C) ships with P4 — the notice states that
-  honestly.
+  (In P3 the split itself was a notice; P4 ships modes B/C — see the next
+  section.)
 - **Template snapshots** (§7 A): per viewKey, the latest snapshot whose
   structure covers the whole intersection (timestamp, hash-tiebreak — a pure
   function of data content, so repeated queries render identically). The
@@ -152,10 +152,81 @@ beside a live UI replica:
 - **Server routes**: `GET /api/aggregate` with
   `sessions=<id,id,…>` XOR `from`/`to` (+ optional `mode=a`). New error
   codes: `AGGREGATE_SELECTION_MISSING` / `_INVALID` / `_TOO_LARGE`,
-  `AGGREGATE_UNKNOWN_SESSIONS`, `AGGREGATE_MODE_NOT_AVAILABLE` (mode b/c →
-  400 with a P4 pointer until they ship). Snapshot resolution problems
-  degrade per-artifact into `warnings` with unresolved `snapshot-unavailable`
-  reasons — one missing file never turns the aggregate into a 500.
+  `AGGREGATE_UNKNOWN_SESSIONS`, `AGGREGATE_MODE_NOT_AVAILABLE` (P3 shipped
+  only `mode=a`; P4 added b/c — see the next section). Snapshot resolution
+  problems degrade per-artifact into `warnings` with unresolved
+  `snapshot-unavailable` reasons — one missing file never turns the aggregate
+  into a 500.
+
+
+## What ships in P4 (aggregate version modes B + C)
+
+The §7 mode machine is now live end to end: **A common-only → B version
+split → C ground-truth merge (pick a version group) → exit back to B (pick
+retained) → back to A re-intersects cleanly**. The counting loop itself is
+mode-agnostic — every resolved event is stamped with the structure-version
+index of the snapshot it actually resolved through (`perVersion`
+attribution, never re-parsed or inferred), and the modes slice that table.
+
+- **Version split (mode B)**: `mode=b`, entered from the divergence badge.
+  Each **divergent** viewKey gets one group per structure fingerprint —
+  chronological ordinal `<viewKey>#<i>` (`groupId`, e.g. `mdu.ui.Dialog#2`),
+  its **own** template snapshot (latest of the cluster, timestamp/hash
+  tie-break) and its **own** counts, including zero-count structure rows so
+  every key of that UI version is visible. A `⊕ n new · ⊖ n missing` diff
+  vs. the **earliest** version (count rows + explorable chip tooltips) and a
+  "pick as ground truth →" action round out each group. The
+  **no-duplication check** holds structurally: groups partition events by
+  the version the resolving snapshot belongs to — `Σ group eventCounts` =
+  all resolved events of the viewKey, nothing counted twice. Non-divergent
+  viewKeys render exactly like mode A (§7 B's "in A" rule).
+- **Ground-truth merge (mode C)**: `mode=c&group=<viewKey>#<i>`. The picked
+  version's template is the **only geometry**; every other version's keys
+  are folded onto ground-truth keys by `matchCanonicalKey`
+  (`server/src/core/versioning.ts`): compares path segments **from the leaf
+  upward**, contiguously (longest common ancestry — this is what keeps a
+  *moved* element matchable), with these wildcard rules for fallback
+  segments — index-only segments of the same `kind:type` wildcard against
+  each other at **any** depth; an index-only segment at the **leaf**
+  position fully wildcards when the canonical `elementType` matches; ≥ 1
+  matched path segment is required (a shared elementType alone matches
+  nothing). Deterministic greedy tie-break: max depth → fewer wildcards →
+  lexicographically smallest key. Merged rows carry per-row **fold
+  receipts** (source key, version, depth, wildcard count). The
+  **unmatched keys panel** keeps every `(key, version)` pair that matched
+  nothing — counted, never dropped — so the invariant
+  `Σ merged counts + Σ unmatched counts = all events of the viewKey` always
+  holds. "exit merge → back to split" returns to B with the pick retained;
+  other divergent viewKeys stay version-split while one is merged.
+- **Client**: the tab surface is shared (`renderSurface`) so replica +
+  heat overlay + ranked list behave identically on a common view, a version
+  group and the merged ground truth; overlays are scoped per surface
+  section because several replicas share one page's `[data-node-id]` map.
+  Tab labels switch honestly per mode, and the total badge shows
+  `N folded` / `M unmatched` in C.
+- **Totals**: new `foldedEvents` / `unmatchedEvents` (mode C). In b/c,
+  `resolvedEvents` counts everything the mode surfaces (resolved + hidden —
+  nothing is hidden outside b/c's accounting) and `hiddenEvents` /
+  `hiddenKeys` are 0.
+- **CSV per mode** (`GET /api/aggregate/export.csv`, same header): mode a
+  unchanged; mode b emits each group's rows with
+  `view = <viewKey>#<i>`, `viewId = <picked template's viewId>`; mode c
+  emits merged rows (`view = <viewKey>`) **and** unmatched rows
+  (`view = <viewKey>#<i>`, key as-is). Zero-count structure rows are not
+  exported (counts-only export, like mode A).
+- **New 400 error codes**: `AGGREGATE_GROUP_MISSING` (`mode=c` without
+  `group=`), `AGGREGATE_GROUP_MODE_MISMATCH` (`group=` without `mode=c`),
+  `AGGREGATE_GROUP_INVALID` (not `<viewKey>#<versionIndex>`),
+  `AGGREGATE_GROUP_UNKNOWN` (pick doesn't exist in the selection) and
+  `AGGREGATE_GROUP_NOT_DIVERGENT` (single-version viewKey). Each mode-c
+  failure message names the valid ordinal range of the current selection.
+- **New fixture world**: four `Dialog` structure versions (checked-in
+  `server/test/aggregateWorld.ts`) — element moved under a `LayoutGroup`
+  container in v3, renamed/anonymous `Switch` variants, `OK` re-parented —
+  outputs 22 dedicated tests (`server/test/versionModes.spec.ts`): matcher
+  table, fingerprint clusters, mode B groups/diffs/no-duplication, mode C
+  merge table + invariant + overlay geometry, error codes, REST routes and
+  per-mode CSV.
 
 
 ## Env vars (server)
@@ -263,9 +334,9 @@ Run these in the Unity editor; the config toggles live on `TelemetryConfig`
 
 Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — P0 (ledger +
 fixtures), P1 (tool skeleton, Influx source, session list), P2 (single-session
-timeline + snapshot replays) and P3 (aggregate mode A heatmaps) are done;
-next up P4 (version modes B/C — fingerprint group tabs, ground-truth merge),
-P5 (switch the standalone `Extra/snapshot-viewer` over to the already-shared
+timeline + snapshot replays), P3 (aggregate mode A heatmaps) and P4 (version
+modes B/C — fingerprint group tabs, ground-truth merge) are done; next up P5
+(switch the standalone `Extra/snapshot-viewer` over to the already-shared
 `@mdu/snapshot-render` package).
 
 > **P3 live-data note:** the two committed demo replays (and their live

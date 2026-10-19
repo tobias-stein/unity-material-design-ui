@@ -101,17 +101,21 @@ describe("aggregate api routes", () => {
   it("UTC range selection works and defaults the mode to a", async () => {
     const { app, cleanup } = await withApp();
     try {
-      // All four fixture sessions start within the same hour.
+      // Every fixture session starts within the same hour.
       const body = (
         await app.inject({ method: "GET", url: "/api/aggregate?from=1970-01-01&to=2999-12-31" })
       ).json();
       expect(body.selection.mode).toBe("a");
       expect(body.selection.fromMs).toBeTypeOf("number");
-      expect(body.totals.sessions).toBe(4);
+      expect(body.totals.sessions).toBe(6);
       const dialog = body.views.find((view: { viewKey: string }) => view.viewKey === "mdu.ui.Dialog");
       expect(dialog.divergent).toBe(true);
-      expect(dialog.hiddenKeyCount).toBe(1);
-      expect(dialog.counts).toHaveLength(1); // mode A counts the intersection only
+      expect(dialog.versionCount).toBe(4); // P4 world: v1…v4 of the same Dialog
+      // Mode A over 4 drifted versions: the only intersecting key is the
+      // (event-less) view-root key, so all 6 distinct event-bearing/united
+      // keys are hidden — quantified, not lost.
+      expect(dialog.counts).toHaveLength(0);
+      expect(dialog.hiddenKeyCount).toBe(6);
     } finally {
       await cleanup();
     }
@@ -135,10 +139,14 @@ describe("aggregate api routes", () => {
       expect(unknown.json().message).toContain("nope");
 
       const modeB = await app.inject({ method: "GET", url: `/api/aggregate?sessions=${SESSION_A}&mode=b` });
-      expect(modeB.statusCode).toBe(400);
-      expect(modeB.json()).toMatchObject({
+      expect(modeB.statusCode).toBe(200); // mode b ships since P4
+      expect(modeB.json().selection.mode).toBe("b");
+
+      const modeZ = await app.inject({ method: "GET", url: `/api/aggregate?sessions=${SESSION_A}&mode=z` });
+      expect(modeZ.statusCode).toBe(400);
+      expect(modeZ.json()).toMatchObject({
         code: "AGGREGATE_MODE_NOT_AVAILABLE",
-        message: expect.stringContaining("P4"),
+        message: expect.stringContaining("available: a, b, c"),
       });
 
       const swapped = await app.inject({ method: "GET", url: "/api/aggregate?from=2026-02-01&to=2026-01-01" });
