@@ -106,6 +106,17 @@ export interface SessionViewSpan {
   dwellSeconds: number | null;
 }
 
+/** Snapshot lanes of the single-session timeline (P2, plan §9.1). */
+export const TimelineLanes = {
+  click: "click",
+  toggle: "toggle",
+  close: "close",
+  backdrop: "backdrop_click",
+  views: "view_open_close",
+} as const;
+
+
+
 /** A snapshot artifact recorded in the `ui_snapshot_taken` ledger. */
 export interface SnapshotLedgerEntry {
   timestampNs: bigint;
@@ -142,4 +153,84 @@ export interface Session {
   eventCountsByType: Record<string, number>;
   /** View-open events still open at the end of the data. */
   openViewCount: number;
+}
+
+/**
+ * Single-session timeline read model (server/core/timeline.ts → REST
+ * `GET /api/sessions/:id/timeline`).
+ */
+export type TimelineLane =
+  | "views"
+  | "click"
+  | "toggle"
+  | "close"
+  | "backdrop_click"
+  | "unresolved";
+
+export interface TimelineEvent {
+  /** Stable ordinal into the ordered events array. */
+  index: number;
+  /** Exact epoch-ns timestamp as a decimal string (JSON-safe; the id). */
+  ns: string;
+  /** Epoch ms float for the canvas (ms resolution per plan §9.1). */
+  ms: number;
+  /** Raw `type` tag (`click`, `toggle`, `view_open`, …). */
+  type: string;
+  /** Lane assignment (§9.1 lanes + §6.1 unresolved rule). */
+  lane: TimelineLane;
+  view: string | null;
+  viewId: string | null;
+  element: string | null;
+  elementType: string | null;
+  /** Toggle state field (`on`); null for non-toggles. */
+  on: boolean | null;
+  /** Recorded dwell seconds (view_close close events); null otherwise. */
+  dwellSeconds: number | null;
+  value: number | null;
+  /**
+   * Snapshot anchor index (into `snapshots`) of the latest anchor of the same
+   * `view_id` at or before the event ("latest ≤ t", §6.1); null unresolved.
+   */
+  snapshotIndex: number | null;
+  unresolved: boolean;
+}
+
+export interface TimelineViewSpan {
+  index: number;
+  view: string;
+  viewId: string | null;
+  openNs: string;
+  openMs: number;
+  closeNs: string | null;
+  closeMs: number | null;
+  dwellSeconds: number | null;
+  stillOpen: boolean;
+}
+
+export interface TimelineSnapshotAnchor {
+  index: number;
+  ns: string;
+  ms: number;
+  view: string | null;
+  viewId: string | null;
+  key: string | null;
+  hash: string | null;
+  nodes: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface TimelineFrame {
+  sessionId: string;
+  startNs: string;
+  endNs: string;
+  startMs: number;
+  endMs: number;
+  /** ui_event count — equals `Session.eventCount` exactly (tested invariant). */
+  eventCount: number;
+  unresolvedCount: number;
+  events: TimelineEvent[];
+  lanes: Array<{ lane: TimelineLane; label: string; count: number }>;
+  viewSpans: TimelineViewSpan[];
+  snapshots: TimelineSnapshotAnchor[];
 }

@@ -2,8 +2,9 @@
 
 Local web tool to visualize the UI telemetry the Unity app already produces:
 
-- **Session list / timeline** — search across sessions; from P2 on, a
-  zoomable NLE-style timeline with pixel-faithful snapshot replays.
+- **Session list / timeline** — search across sessions; every session opens
+  (`#/session/:id`) into a zoomable NLE-style timeline with pixel-faithful
+  snapshot replays (P2).
 - **Aggregate heatmaps** — which UI elements get used most, overlaid on
   replica renders across many sessions (P3+).
 
@@ -54,6 +55,55 @@ corepack pnpm --filter @mdu/telemetry-viewer-server dev   # Fastify :8087
 Every error is `{"code": string, "message": string, "detail"?}`, 4xx/5xx —
 never HTML. Examples: `INFLUX_UNAVAILABLE` (Influx down → 503),
 `INFLUX_UNAUTHORIZED`, `SESSION_NOT_FOUND` (404), `INVALID_TIME` (400).
+Snapshot errors: `SNAPSHOT_STORE_UNCONFIGURED`/`SNAPSHOT_STORE_UNREACHABLE`
+(503), `SNAPSHOT_ARTIFACT_MISSING` / `SNAPSHOT_NOT_IN_LEDGER` /
+`SNAPSHOT_INDEX_OUT_OF_RANGE` (404), `SNAPSHOT_YAML_INVALID` /
+`SNAPSHOT_EMPTY` / `SNAPSHOT_PARSE_FAILED` (409, hash included in
+`detail`), and `INVALID_SNAPSHOT_REF` (400).
+
+## What ships in P2 (single-session timeline)
+
+Every session row now opens into `#/session/<id>` — a NLE-style timeline
+beside a live UI replica:
+
+- **Canvas timeline** (`web/src/views/timeline.ts`): adaptive ruler
+  (nice 1/2/5 decades), wheel = zoom around the cursor, shift+wheel /
+  two-finger = pan, drag pan, pinch = zoom around the two-pointer midpoint,
+  double-click = fit. Window bounds: full session ≥ span ≥ 1 ms (ms
+  resolution cap). Redraw is dirty-flag driven (idle rAF costs ~0 draw); the
+  footer shows a live fps + draw-time readout.
+- **Lanes** (server constants `LANE_ORDER`): `view open/close` with dwell
+  span bars, `click`, `toggle` (on/off colored), `close`, `backdrop_click`,
+  and **unresolved** — every interaction a snapshot could not hold rides the
+  timeline on the unresolved lane (§6.1: never dropped). Dense stretches
+  collapse into per-pixel density bars, sparse stretches draw marbles; a
+  5k-event session stays interactive without per-event DOM.
+- **Filmstrip**: one simplified blocky mini-map per snapshot capture
+  (computed by `@mdu/snapshot-render`'s `computeMiniMap`), fetched lazily
+  with bounded concurrency; a click on the strip snaps the playhead; ⚠ marks
+  captures with the geometry warning.
+- **Playhead**: drag in the ruler, click anywhere to place, `←/→` step
+  events, `PgUp/PgDn` snap to snapshot anchors, `Home/End`, `+/−` zoom.
+  The replica panel renders the *nearest capture at or before the playhead*
+  through the shared renderer (`@mdu/snapshot-render`,
+  `bytes → js-yaml → pre-shaped JSON → DOM`). Wheel over the replica is
+  inert (the timeline is the only zoom surface); theme toggle (default-light
+  / raw, persisted per session in `sessionStorage`) re-derives render colors
+  from palette **roles** — captured theme colors are never copied implicitly
+  (§3.8). The exporter's geometry warning ("capture likely ran before layout
+  was applied") surfaces as warning chips above the replica, same as the
+  standalone viewer.
+- **Server routes**: `GET /api/sessions/:id/timeline` (the whole frame in
+  one DTO; `eventCount` equals `<Session>`'s exactly — tested invariance)
+  and `GET /api/snapshots/:sessionId/:ref` where `ref` is the numeric
+  ledger index, a `hash:<sha256>` literal, or `?near=<epochMs>[&viewId=…]`
+  for "the capture played at that wall-clock moment". Snapshot YAML is
+  parsed **server-side only** (js-yaml on gunzipped bytes, bounded LRU) —
+  no YAML, tmp paths, or tokens ever reach the web bundle.
+- **Dev helper**: `node scripts/make-big-session-lp.mjs --out <LP_ROOT>`
+  writes a deterministic synthetic `.lp` (default 5k `ui_event`, optional
+  `ui_snapshot_taken` ledger anchors, `--anchors 0` for the
+  unresolved-lane stress) for fps verification without a Unity run.
 
 ## Env vars (server)
 
@@ -64,7 +114,7 @@ never HTML. Examples: `INFLUX_UNAVAILABLE` (Influx down → 503),
 | `INFLUX_TOKEN` | local dev token | Bearer token for `/api/v2/query`. Baked compose/dev default only — override in any non-dev setup. Never shipped to the web bundle. |
 | `INFLUX_TIMEOUT_MS` | `10000` | Query/health timeout |
 | `LP_ROOT` | — | Directory auto-scanned for `*.lp` session files (file source; mount read-only in compose) |
-| `SNAPSHOT_ROOT` | — | Snapshot storage root; surfaces in `/api/sources` (resolved in P2/P3 for snapshot lookups) |
+| `SNAPSHOT_ROOT` | — | Snapshot storage root; surfaced in `/api/sources` and resolved by `/api/snapshots/:sessionId/:ref` since P2 (store probe → honest 503/404; mount read-only in compose) |
 | `PORT` / `HOST` | `8087` / `0.0.0.0` | Server bind |
 | `WEB_DIST` | `<repo>/web/dist` | Where the built client lives (served statically with SPA fallback) |
 
@@ -92,9 +142,14 @@ tests run against (`./scripts/export-fixtures.sh` regenerates):
 
 ```bash
 cd Extra/telemetry-viewer
-corepack pnpm --filter @mdu/telemetry-viewer-server test     # 39 tests
+corepack pnpm --filter @mdu/telemetry-viewer-server test     # 62 tests
 corepack pnpm test                                          # whole workspace
 ```
+
+P2 adds `timeline.spec.ts` (correlation "latest ≤ t", unresolved-never-dropped,
+event-count invariance, dwell spans, synthetic 5k frame) and
+`snapshots.spec.ts` (gz sniffing, geometry-warning parity with the standalone
+viewer, id normalization, `SnapshotService` store probing + LRU).
 
 ## P0 ledger basis (runtime side)
 
@@ -143,7 +198,8 @@ Run these in the Unity editor; the config toggles live on `TelemetryConfig`
 ## Roadmap
 
 Phased delivery per `~/.opencode/plan/ui-telemetry-viewer.md` — P0 (ledger +
-fixtures) and P1 (tool skeleton, Influx source, session list) are done; next
-up P2 (single-session timeline with canvas ruler/lanes/playhead replays),
-P3 (aggregate mode A heatmaps), P4 (version modes B/C), P5 (shared
-snapshot-render package extraction).
+fixtures), P1 (tool skeleton, Influx source, session list) and P2
+(single-session timeline + snapshot replays) are done; next up P3 (aggregate
+mode A heatmaps), P4 (version modes B/C), P5 (switch the standalone
+`Extra/snapshot-viewer` over to the already-shared `@mdu/snapshot-render`
+package).

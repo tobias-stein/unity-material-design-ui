@@ -151,3 +151,233 @@ input[type="date"] { color-scheme: dark; }
   font-size: 12px;
 }
 .hints code { font-family: var(--mono); color: #a9bacb; }
+
+/* ------------------------------------------------------------------ P2 timeline */
+
+/* Full-height workspace: the canvas belongs to the viewport, not the page. */
+body.timeline-open { overflow: hidden; }
+.timeline-layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 12px;
+  padding: 12px 18px 8px;
+  min-height: 0;
+}
+@media (max-width: 1100px) {
+  .timeline-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+.session-title { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
+.session-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.snap-chip { color: var(--primary); font-weight: 600; margin-left: 4px; }
+
+.timeline-left {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.canvas-wrap {
+  flex: 1;
+  position: relative;
+  min-height: 320px;
+  /* dense NLE look behind the canvas rows */
+  background: #0e1116;
+}
+.canvas-wrap canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  cursor: default;
+  touch-action: none; /* pinch/pan gestures belong to us */
+}
+
+/* ------------------------------------------------------------ replica panel */
+
+.replica-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: visible;
+}
+.replica-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.replica-title { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; }
+.segmented {
+  display: flex;
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 4px 12px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.segmented button.active { background: #2f6685; color: #dff3ff; }
+
+.replica-warnings { padding: 0; }
+.warn-chip {
+  margin: 8px 12px 0;
+  font-size: 11.5px;
+  color: #f2b8b5;
+  background: #201313;
+  border: 1px solid #4a2f2f;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.replica-meta {
+  padding: 8px 14px 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.replica-viewport {
+  flex: 1;
+  position: relative;
+  margin: 10px 12px 12px;
+  min-height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background:
+    linear-gradient(45deg, #17202c 25%, transparent 25%, transparent 75%, #17202c 75%) 0 0/20px 20px,
+    linear-gradient(45deg, #17202c 25%, transparent 25%, transparent 75%, #17202c 75%) 10px 10px/20px 20px,
+    #10161e;
+  overflow: auto;
+}
+.replica-holder {
+  position: absolute;
+  inset: 0;
+  padding: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+}
+.replica-stage {
+  position: relative;
+  flex: none;
+  transform-origin: top center;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.replica-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 18px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.replica-empty.hidden { display: none; }
+.replica-footer {
+  padding: 0 14px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  min-height: 16px;
+}
+
+/* -------------------------------------------- rendered snapshot nodes (ported)
+   Identical class names/selectors to Extra/snapshot-viewer/viewer.css, scoped
+   to .replica-stage. Flat absolute placement: the shared replica renderer
+   positions every node root-relative in export order. */
+
+.replica-stage > .node { position: absolute; }
+.node {
+  position: relative;
+  overflow: hidden;
+  font-family: Roboto, system-ui, sans-serif;
+  outline: 0 solid transparent;
+}
+
+/* text nodes */
+.node.type-text { white-space: pre-wrap; overflow: visible; }
+.node.type-icon {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  font-feature-settings: "liga";
+  text-align: center;
+  overflow: visible;
+}
+
+/* buttons (mdu.ui.Button) */
+.node.type-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-style: solid;
+  border-width: 0;
+  text-transform: none;
+  font-weight: 500;
+  cursor: default;
+  box-shadow: none;
+}
+.node.type-button.style-elevated { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15); }
+
+/* switch (mdu.ui.Switch) — static approximation */
+.node.type-switch { overflow: visible; background: transparent !important; }
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 100px;
+  background: var(--switch-track, var(--m3-surface-variant, #e7e0ec));
+}
+.switch-thumb {
+  position: absolute;
+  top: 50%;
+  width: 52%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(14%, -50%);
+  background: var(--switch-thumb, var(--m3-outline, #79747e));
+}
+.node.checked .switch-track { background: var(--m3-primary, #6750a4); }
+.node.checked .switch-thumb { background: var(--m3-on-primary, #fff); transform: translate(56%, -50%); }
+
+/* chips */
+.node.type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--m3-outline-variant, #cac4d0);
+}
+
+/* list items */
+.node.type-listitem { display: flex; align-items: center; }
+
+/* app bar */
+.node.type-appbar {
+  display: flex;
+  align-items: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+}

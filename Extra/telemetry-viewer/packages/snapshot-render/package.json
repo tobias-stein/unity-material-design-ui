@@ -1,0 +1,14 @@
+{
+  "name": "@mdu/snapshot-render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Shared UI-snapshot rendering core (replica DOM + minimap) for the snapshot viewer and the telemetry viewer's playhead panel.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

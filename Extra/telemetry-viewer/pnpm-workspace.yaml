@@ -1,7 +1,7 @@
 packages:
   - server
   - web
-  # - packages/*  # snapshot-render shared library lands in P5
+  - packages/*  # snapshot-render shared rendering library (P2 playhead + filmstrip)
 
 # Explicitly reviewed script execution (pnpm ≥ 12: allowBuilds, was
 # onlyBuiltDependencies). Only these dependencies may run postinstall build

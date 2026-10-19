@@ -10,11 +10,80 @@ import fastifyStatic from "@fastify/static";
 import type { ToolConfig } from "../config.js";
 import type { Session, SourceProvider } from "../domain.js";
 import { buildSessionCatalog, filterSessions, type ProviderRun, type SessionCatalog } from "../core/sessionCatalog.js";
+import { buildTimelineFrame, type TimelineFrame } from "../core/timeline.js";
 import { FluxInfluxSource } from "../sources/influx.js";
 import { LpFileListSource } from "../sources/lpFiles.js";
 import { LocalFsSnapshotStore } from "../storage/snapshotStore.js";
+import { SnapshotService, SnapshotResolutionError } from "../snapshots/snapshotService.js";
 import { registerErrorHandlers, ApiError, errorBody } from "./errorHandling.js";
-import { nsToMs, parseRangeQuery } from "./queryParams.js";
+import { nsToMs, parseTimeParam, parseRangeQuery } from "./queryParams.js";
+
+/** Parsed-snapshot resolution is shared across timeline playhead requests. */
+function snapshotReference(
+  session: Session,
+  ref: string,
+  query: Record<string, unknown>,
+): { key: string | null; hash: string | null; index: number } {
+  const anchors = session.snapshots;
+  if (anchors.length === 0) {
+    throw new ApiError("NO_SNAPSHOTS", "The session ledger holds no snapshot points.", 404);
+  }
+
+  const nearRaw = query.near;
+  if (typeof nearRaw === "string" && nearRaw !== "") {
+    const nearMs = parseTimeParam(nearRaw, "near");
+    if (nearMs === undefined) {
+      throw new ApiError("INVALID_TIME", "Query parameter \"near\" is not a valid time.", 400);
+    }
+    const viewIdFilter = typeof query.viewId === "string" && query.viewId !== "" ? query.viewId : null;
+    const nearNs = BigInt(Math.floor(nearMs)) * 1_000_000n;
+    // Latest anchor (of the requested view when given) at or before `near`.
+    let best = -1;
+    for (let i = 0; i < anchors.length; i++) {
+      const anchor = anchors[i]!;
+      if (anchor.timestampNs > nearNs) continue;
+      if (viewIdFilter !== null && anchor.viewId !== viewIdFilter) continue;
+      best = i;
+    }
+    if (best === -1) {
+      // Nothing before `near`: honest 404 (the client shows an honest
+      // pre-first-snapshot state rather than teleporting to a later anchor).
+      throw new ApiError(
+        "SNAPSHOT_NOT_AT_OR_BEFORE",
+        `No snapshot of view ${viewIdFilter ?? "(any)"} at or before the requested time.`,
+        404,
+      );
+    }
+    return { key: anchors[best]!.key, hash: anchors[best]!.hash, index: best };
+  }
+
+  if (/^\d+$/.test(ref)) {
+    const index = Number.parseInt(ref, 10);
+    if (index < 0 || index >= anchors.length) {
+      throw new ApiError(
+        "SNAPSHOT_INDEX_OUT_OF_RANGE",
+        `Snapshot index ${index} out of range (session holds ${anchors.length}).`,
+        404,
+      );
+    }
+    return { key: anchors[index]!.key, hash: anchors[index]!.hash, index };
+  }
+
+  if (ref.startsWith("hash:")) {
+    const hash = ref.slice("hash:".length);
+    const index = anchors.findIndex((anchor) => anchor.hash === hash);
+    if (index === -1) {
+      throw new ApiError("SNAPSHOT_NOT_IN_LEDGER", `Ledger holds no snapshot with hash ${hash}.`, 404);
+    }
+    return { key: anchors[index]!.key, hash: anchors[index]!.hash, index };
+  }
+
+  throw new ApiError(
+    "INVALID_SNAPSHOT_REF",
+    "Snapshot reference must be a numeric index or `hash:<sha256>` (or pass ?near=<time>).",
+    400,
+  );
+}
 
 export interface AppOptions {
   config: ToolConfig;
@@ -33,6 +102,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   const providers = options.providers ?? defaultProviders(config);
   const snapshotStore = new LocalFsSnapshotStore(config.snapshotRoot);
+  const snapshotService = new SnapshotService(snapshotStore);
   const cacheMs = options.catalogCacheMs ?? 5_000;
   const spaIndexFile = await resolveSpaIndex(app, config);
 
@@ -102,6 +172,53 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       throw new ApiError("SESSION_NOT_FOUND", `No session "${request.params.id}" in any source.`, 404);
     }
     return toSessionDtoIncludeSnapshots(session);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/timeline", { logLevel: "error" }, async (request) => {
+    const catalogResult = await catalogGuard(catalog());
+    const session = catalogResult.sessions.find((entry) => entry.id === request.params.id);
+    if (session === undefined) {
+      throw new ApiError("SESSION_NOT_FOUND", `No session "${request.params.id}" in any source.`, 404);
+    }
+    // Events come from the session's own provider run (files win by identity,
+    // §6.1) and are filtered to this session — never double-counted.
+    const producingRun = catalogResult.runs.find((run) => run.id === session.origin);
+    const sessionEvents = (producingRun?.result?.events ?? []).filter((event) => event.tags.session === session.id);
+    const frame = buildTimelineFrame(session, sessionEvents);
+    // The timeline is the session detail's event list — nothing may be added
+    // or silently dropped between the two read models (tested invariant).
+    return toTimelineDto(catalogResult, frame, session);
+  });
+
+  app.get<{
+    Params: { id: string; ref: string };
+    Querystring: Record<string, unknown>;
+  }>("/api/snapshots/:id/:ref", { logLevel: "error" }, async (request) => {
+    const catalogResult = await catalogGuard(catalog());
+    const session = catalogResult.sessions.find((entry) => entry.id === request.params.id);
+    if (session === undefined) {
+      throw new ApiError("SESSION_NOT_FOUND", `No session "${request.params.id}" in any source.`, 404);
+    }
+    const reference = snapshotReference(session, request.params.ref, request.query);
+    try {
+      const resolved = await snapshotService.resolve({
+        key: reference.key,
+        hash: reference.hash,
+      });
+      return {
+        sessionId: session.id,
+        index: reference.index,
+        snapshotId: resolved.snapshotId,
+        hash: resolved.hash,
+        key: resolved.key,
+        parsed: resolved.parsed,
+      };
+    } catch (error) {
+      if (error instanceof SnapshotResolutionError) {
+        throw new ApiError(error.code, error.message, error.httpStatus as 400 | 404 | 409 | 503, error.detail);
+      }
+      throw error;
+    }
   });
 
   registerErrorHandlers(app, { spaIndexFile });
@@ -246,5 +363,76 @@ export function toSessionDtoIncludeSnapshots(session: Session): SessionDto & {
       width: snapshot.width,
       height: snapshot.height,
     })),
+  };
+}
+
+export interface TimelineEventDto {
+  index: number;
+  ns: string;
+  ms: number;
+  type: string;
+  lane: string;
+  view: string | null;
+  viewId: string | null;
+  element: string | null;
+  elementType: string | null;
+  on: boolean | null;
+  dwellSeconds: number | null;
+  value: number | null;
+  snapshotIndex: number | null;
+  unresolved: boolean;
+}
+
+export interface TimelineDto {
+  session: SessionDto;
+  status: "ok" | "degraded" | "unavailable";
+  startNs: string;
+  endNs: string;
+  startMs: number;
+  endMs: number;
+  eventCount: number;
+  unresolvedCount: number;
+  lanes: Array<{ lane: string; label: string; count: number }>;
+  events: TimelineEventDto[];
+  viewSpans: Array<{
+    index: number;
+    view: string;
+    viewId: string | null;
+    openNs: string;
+    openMs: number;
+    closeNs: string | null;
+    closeMs: number | null;
+    dwellSeconds: number | null;
+    stillOpen: boolean;
+  }>;
+  snapshots: Array<{
+    index: number;
+    ns: string;
+    ms: number;
+    view: string | null;
+    viewId: string | null;
+    key: string | null;
+    hash: string | null;
+    nodes: number | null;
+    width: number | null;
+    height: number | null;
+  }>;
+}
+
+export function toTimelineDto(_catalogResult: SessionCatalog, frame: TimelineFrame, session: Session): TimelineDto {
+  const catalogStatus = _catalogResult.status;
+  return {
+    session: toSessionDto(session),
+    status: catalogStatus,
+    startNs: frame.startNs,
+    endNs: frame.endNs,
+    startMs: frame.startMs,
+    endMs: frame.endMs,
+    eventCount: frame.eventCount,
+    unresolvedCount: frame.unresolvedCount,
+    lanes: frame.lanes,
+    events: frame.events,
+    viewSpans: frame.viewSpans,
+    snapshots: frame.snapshots,
   };
 }

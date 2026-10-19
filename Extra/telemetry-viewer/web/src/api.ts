@@ -92,6 +92,114 @@ async function request<T>(url: string): Promise<T> {
   return parsed as T;
 }
 
+/* ------------------------------------------------------- timeline (P2) */
+
+export interface TimelineEventDto {
+  index: number;
+  ns: string;
+  ms: number;
+  type: string;
+  lane: string;
+  view: string | null;
+  viewId: string | null;
+  element: string | null;
+  elementType: string | null;
+  on: boolean | null;
+  dwellSeconds: number | null;
+  value: number | null;
+  snapshotIndex: number | null;
+  unresolved: boolean;
+}
+
+export interface TimelineSnapshotDto {
+  index: number;
+  ns: string;
+  ms: number;
+  view: string | null;
+  viewId: string | null;
+  key: string | null;
+  hash: string | null;
+  nodes: number | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface TimelineViewSpanDto {
+  index: number;
+  view: string;
+  viewId: string | null;
+  openMs: number;
+  closeMs: number | null;
+  dwellSeconds: number | null;
+  stillOpen: boolean;
+}
+
+export interface TimelineLaneDto {
+  lane: string;
+  label: string;
+  count: number;
+}
+
+export interface TimelineResponse {
+  session: SessionDto;
+  status: "ok" | "degraded" | "unavailable";
+  startNs: string;
+  endNs: string;
+  startMs: number;
+  endMs: number;
+  eventCount: number;
+  unresolvedCount: number;
+  lanes: TimelineLaneDto[];
+  events: TimelineEventDto[];
+  viewSpans: TimelineViewSpanDto[];
+  snapshots: TimelineSnapshotDto[];
+}
+
+/* parsed snapshot document (server-side YAML parse, plan §5) */
+
+export interface SnapshotNodeDto {
+  id: string;
+  kind?: string;
+  name?: string;
+  type?: string;
+  parentId?: string | null;
+  siblingIndex?: number;
+  active?: boolean;
+  isView?: boolean;
+  layer?: string | null;
+  rect?: { x?: number; y?: number; width?: number; height?: number } | null;
+  layout?: Record<string, unknown> | null;
+  layoutElement?: Record<string, unknown> | null;
+  contentSizeFitter?: Record<string, unknown> | null;
+  data?: Record<string, unknown> | null;
+  resolved?: Record<string, unknown> | null;
+}
+
+export interface ParsedSnapshotDto {
+  schemaVersion: number;
+  timestampUtc: string | null;
+  app: Record<string, unknown> | null;
+  view: Record<string, unknown> | null;
+  theme: {
+    isDark?: boolean;
+    palette?: Record<string, string>;
+    typography?: Record<string, never> | null;
+  } | null;
+  nodes: SnapshotNodeDto[];
+  childrenOf: Record<string, string[]>;
+  rootId: string;
+  warnings: string[];
+}
+
+export interface SnapshotResponse {
+  sessionId: string;
+  index: number;
+  snapshotId: string;
+  hash: string | null;
+  key: string | null;
+  parsed: ParsedSnapshotDto;
+}
+
 export const api = {
   sources: (): Promise<SourcesResponse> => request("/api/sources"),
   sessions: (query: SessionsQuery): Promise<SessionsResponse> => {
@@ -103,7 +211,11 @@ export const api = {
     const suffix = params.toString();
     return request(`/api/sessions${suffix === "" ? "" : `?${suffix}`}`);
   },
-  session: (id: string): Promise<unknown> => request(`/api/sessions/${encodeURIComponent(id)}`),
+  session: (id: string): Promise<SessionDto> => request(`/api/sessions/${encodeURIComponent(id)}`),
+  timeline: (id: string): Promise<TimelineResponse> =>
+    request(`/api/sessions/${encodeURIComponent(id)}/timeline`),
+  snapshot: (id: string, ref: string): Promise<SnapshotResponse> =>
+    request(`/api/snapshots/${encodeURIComponent(id)}/${encodeURIComponent(ref)}`),
 };
 
 export interface SessionsQuery {

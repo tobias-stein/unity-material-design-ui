@@ -21,10 +21,23 @@ export interface SnapshotStoreStatus {
   message?: string;
 }
 
+/** Cheap root sanity check (no tree walk) for per-request error mapping. */
+export interface SnapshotStoreProbe {
+  state: "ok" | "unconfigured" | "unreachable" | "not-a-directory";
+  message?: string;
+}
+
 export interface SnapshotStore {
   /** Identifier used in `GET /api/sources`. */
   readonly id: string;
+  /** Storage root as configured (null = unconfigured); used for error mapping. */
+  readonly root: string | null;
   describe(): Promise<SnapshotStoreStatus>;
+  /**
+   * Cheap existence probe of the root (used to tell "artifact missing" apart
+   * from "store unreachable" — otherwise both look like failed resolution).
+   */
+  probe(): Promise<SnapshotStoreProbe>;
   /**
    * Resolve a storage key + expected hash to bytes, or `null` when absent.
    * `key` may be normalized away (hash-first matching); `hash` is the truth.
@@ -35,7 +48,23 @@ export interface SnapshotStore {
 export class LocalFsSnapshotStore implements SnapshotStore {
   readonly id = "local-fs";
 
-  constructor(private readonly root: string | null) {}
+  constructor(readonly root: string | null) {}
+
+  async probe(): Promise<SnapshotStoreProbe> {
+    if (this.root === null) return { state: "unconfigured" };
+    try {
+      const stat = await fs.stat(this.root);
+      if (!stat.isDirectory()) {
+        return { state: "not-a-directory" };
+      }
+      return { state: "ok" };
+    } catch (error) {
+      return {
+        state: "unreachable",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 
   async describe(): Promise<SnapshotStoreStatus> {
     if (this.root === null) {

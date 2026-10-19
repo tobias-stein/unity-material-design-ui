@@ -4,8 +4,10 @@
  * (`{ code, message }`, never HTML), and the read-only guarantee.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { buildApp, toSessionDto } from "../src/api/app.js";
 import { projectSessions } from "../src/core/sessionProjection.js";
 import type { ToolConfig } from "../src/config.js";
@@ -238,6 +240,170 @@ describe("api routes", () => {
     expect(detailed.eventCount).toBe(dto.eventCount);
     expect(detailed.snapshotCount).toBe(dto.snapshotCount);
     await app.close();
+  });
+
+  describe("timeline + snapshot routes (P2)", () => {
+    const snapSession = "3d07snap4e5566443d07snap4e556644";
+
+    it("/api/sessions/:id/timeline carries every event ordered, count-matching the detail", async () => {
+      const files = new LpFileListSource({ root: fixturesDir });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: fixturesDir },
+        providers: () => [files],
+      });
+      const detail = (await app.inject({ method: "GET", url: `/api/sessions/${snapSession}` })).json();
+      const timeline = (await app.inject({ method: "GET", url: `/api/sessions/${snapSession}/timeline` })).json();
+
+      // P2 acceptance: timeline event count == GET /api/sessions/:id count.
+      expect(timeline.eventCount).toBe(detail.eventCount);
+      expect(timeline.events).toHaveLength(timeline.eventCount);
+      expect(timeline.session.owner).toBe("Unity-MaterialDesign-UI");
+
+      const msList = timeline.events.map((e: { ms: number }) => e.ms);
+      expect(msList).toEqual([...msList].sort((a: number, b: number) => a - b));
+      expect(timeline.events.find((e: { type: string }) => e.type === "click").snapshotIndex).toBe(0);
+      // Snapshot anchors ride the payload in ledger order.
+      expect(timeline.snapshots.map((s: { key: string }) => s.key)).toEqual([
+        "snapshots/2026/04/01/UIDemoMainMenu-141500.yaml",
+        "snapshots/2026/04/01/UIDemoMainMenu-141505.yaml.gz",
+      ]);
+      await app.close();
+    });
+
+    it("timeline for a snapshot-less session returns honest zero-edge state", async () => {
+      const files = new LpFileListSource({ root: fixturesDir });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: fixturesDir },
+        providers: () => [files],
+      });
+      const timeline = (
+        await app.inject({ method: "GET", url: "/api/sessions/1e55capedf1f115e1e55capedf1f115e/timeline" })
+      ).json();
+      expect(timeline.eventCount).toBe(4);
+      expect(timeline.snapshots).toEqual([]);
+      expect(timeline.lanes.find((l: { lane: string }) => l.lane === "unresolved").count).toBe(2);
+      await app.close();
+    });
+
+    it("timeline 404s keep the uniform envelope", async () => {
+      const files = new LpFileListSource({ root: fixturesDir });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: fixturesDir },
+        providers: () => [files],
+      });
+      const response = await app.inject({ method: "GET", url: "/api/sessions/does-not-exist/timeline" });
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ code: "SESSION_NOT_FOUND" });
+      expect(response.headers["content-type"]).toContain("application/json");
+      await app.close();
+    });
+
+    it("/api/snapshots/:id/:ref resolves a real matched store file end-to-end (yaml + gz)", async () => {
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "mdu-snapshots-"));
+      // Build a schema-v2 snapshot whose ledger metadata matches the shape the
+      // runtime emits, then hash-stamp the exact bytes into a live .lp fixture.
+      const yamlV2 = Buffer.from(
+        JSON.stringify({
+          schemaVersion: 2,
+          timestampUtc: "2026-04-01T14:15:00Z",
+          app: { productName: "Unity-MaterialDesign-UI" },
+          view: { id: "a8c1e0f42b7d4f8e9a2c3d405e6f7081", name: "UIDemoMainMenu" },
+          theme: { isDark: false, palette: { Primary: "#6750A4" } },
+          nodes: [
+            { id: "root", kind: "ui", isView: true, active: true, rect: { x: 0, y: 0, width: 400, height: 300 } },
+          ],
+        }),
+        "utf8",
+      );
+      const gzV2 = (await import("node:zlib")).gzipSync(yamlV2);
+      const hash1 = createHash("sha256").update(yamlV2).digest("hex");
+      const hash2 = createHash("sha256").update(gzV2).digest("hex");
+      await writeFile(path.join(storeRoot, "UIDemoMainMenu-141500.yaml"), yamlV2);
+      await writeFile(path.join(storeRoot, "UIDemoMainMenu-141505.yaml.gz"), gzV2);
+
+      const sessionId = snapSession;
+      const lp = [
+        `session,session=${sessionId},type=start value=1i 1775052840000000000`,
+        `ui_event,session=${sessionId},type=view_open,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1775052899000000000`,
+        `ui_snapshot_taken,session=${sessionId},view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 key="snapshots/2026/04/01/UIDemoMainMenu-141500.yaml",hash="${hash1}",nodes=1i,width=400,height=300,owner="Unity-MaterialDesign-UI",platform="OSXEditor",screen="1920x1080" 1775052900000000000`,
+        `ui_event,element=UIPlayButton,element_type=mdu.ui.Button,session=${sessionId},type=click,view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 value=1i 1775052903000000000`,
+        `ui_snapshot_taken,session=${sessionId},view=UIDemoMainMenu,view_id=a8c1e0f42b7d4f8e9a2c3d405e6f7081 key="snapshots/2026/04/01/UIDemoMainMenu-141505.yaml.gz",hash="${hash2}",nodes=1i,width=400,height=300,owner="Unity-MaterialDesign-UI",platform="OSXEditor",screen="1920x1080" 1775052905000000000`,
+      ].join("\n");
+      const lpRoot = await mkdtemp(path.join(tmpdir(), "mdu-lp-"));
+      await writeFile(path.join(lpRoot, "session-fixture.lp"), lp);
+
+      const files = new LpFileListSource({ root: lpRoot });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot, snapshotRoot: storeRoot },
+        providers: () => [files],
+        catalogCacheMs: 0,
+      });
+
+      // Index route → parsed snapshot JSON (server-side YAML/gz handling).
+      const byIndex = (await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/0` })).json();
+      expect(byIndex.hash).toBe(hash1);
+      expect(byIndex.parsed.schemaVersion).toBe(2);
+      expect(byIndex.parsed.rootId).toBe("root");
+      expect(byIndex.parsed.nodes[0].rect.width).toBe(400);
+
+      // gz: index 1 (rounded-trip through gunzip sniff).
+      const byGzIndex = (await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/1` })).json();
+      expect(byGzIndex.parsed.nodes).toHaveLength(1);
+      expect(byGzIndex.key).toBe("snapshots/2026/04/01/UIDemoMainMenu-141505.yaml.gz");
+
+      // Hash routes (the true join key) + near queries.
+      const byHash = (await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/hash:${hash2}` })).json();
+      expect(byHash.index).toBe(1);
+      const near = (
+        await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/0?near=1775052903000` })
+      ).json();
+      expect(near.index).toBe(0);
+
+      // Missing artifact (hash exists in ledger, no file) → honest 404.
+      const missing = await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/999` });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json().code).toBe("SNAPSHOT_INDEX_OUT_OF_RANGE");
+
+      // Missing-file-by-byte-hash: rewrite ledger so the hash differs.
+      const fakeHash = `f${hash1.slice(0, 63)}`;
+      const badLp = lp.replace(hash1, fakeHash);
+      await writeFile(path.join(lpRoot, "session-fixture-bad.lp"), badLp);
+      const unavailable = await app.inject({ method: "GET", url: `/api/snapshots/${sessionId}/hash:${fakeHash}` });
+      expect(unavailable.statusCode).toBe(404);
+      expect(unavailable.json().code).toBe("SNAPSHOT_ARTIFACT_MISSING");
+
+      await rm(lpRoot, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("snapshot route honors unconfigured store with 503 degradation, not a crash", async () => {
+      const files = new LpFileListSource({ root: fixturesDir });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: fixturesDir },
+        providers: () => [files],
+      });
+      const response = await app.inject({ method: "GET", url: `/api/snapshots/${snapSession}/0` });
+      expect(response.statusCode).toBe(503);
+      expect(response.json().code).toBe("SNAPSHOT_STORE_UNCONFIGURED");
+      await app.close();
+    });
+
+    it("snapshot ?near before the first anchor 404s honestly (pre-first-snapshot state)", async () => {
+      const files = new LpFileListSource({ root: fixturesDir });
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: fixturesDir },
+        providers: () => [files],
+        catalogCacheMs: 0,
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/snapshots/${snapSession}/0?near=1000`,
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().code).toBe("SNAPSHOT_NOT_AT_OR_BEFORE");
+      await app.close();
+    });
   });
 });
 
