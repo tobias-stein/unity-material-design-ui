@@ -270,6 +270,64 @@ describe("api routes", () => {
       await app.close();
     });
 
+    it("timeline serves the unioned stream when a pending-*.lp tail overlaps influx (2026-10-21 regression)", async () => {
+      // The leftover .lp holds ONLY session start/end points for a session
+      // whose acknowledged stream lives in InfluxDB. The union catalog must
+      // win: the timeline rides the merged events, not the origin run alone
+      // (which filtered to 0 events → no marbles on any track in the client).
+      const splitSession = "5afdsplite128a4594a5c40eaf430be627";
+      const sessionPoint = (ns: bigint, type: string): RawEvent => ({
+        measurement: "session" as const,
+        timestampNs: ns,
+        tags: { session: splitSession, type },
+        fields: { value: 1 },
+      });
+      const uiEvent = (ns: bigint, type: string): RawEvent => ({
+        measurement: "ui_event" as const,
+        timestampNs: ns,
+        tags: { session: splitSession, type, view: "Main", view_id: "main-1" },
+        fields: { value: 1 },
+      });
+      const files: SourceProvider = {
+        id: "lp-files",
+        describe: async () => ({ id: "lp-files", available: true, state: "ok", facts: {} }),
+        fetchEvents: async () => ({
+          events: [sessionPoint(1_000_000_000n, "start"), sessionPoint(9_000_000_000n, "end")],
+          malformedCount: 0,
+        }),
+      };
+      const influx: SourceProvider = {
+        id: "influx",
+        describe: async () => ({ id: "influx", available: true, state: "ok", facts: {} }),
+        fetchEvents: async () => ({
+          events: [
+            uiEvent(2_000_000_000n, "view_open"),
+            uiEvent(3_000_000_000n, "click"),
+            uiEvent(4_000_000_000n, "toggle"),
+            uiEvent(8_000_000_000n, "view_close"),
+          ],
+          malformedCount: 0,
+        }),
+      };
+
+      const app = await buildApp({
+        config: { ...fixtureConfig(), lpRoot: null },
+        providers: () => [files, influx],
+      });
+      const detail = (await app.inject({ method: "GET", url: `/api/sessions/${splitSession}` })).json();
+      const timeline = (await app.inject({ method: "GET", url: `/api/sessions/${splitSession}/timeline` })).json();
+
+      expect(detail.eventCount).toBe(4); // union, not the lp tail's 2 points
+      expect(timeline.eventCount).toBe(detail.eventCount); // was 0 ui_events pre-fix
+      expect(timeline.events).toHaveLength(4);
+      const types = timeline.events.map((e: { type: string }) => e.type);
+      expect(types).toEqual(["view_open", "click", "toggle", "view_close"]);
+      // Events land on their view's track (the reported regression symptom).
+      expect(timeline.rowCount).toBe(1);
+      expect(timeline.events.map((e: { spanId: number }) => e.spanId)).toEqual([0, 0, 0, 0]);
+      await app.close();
+    });
+
     it("timeline for a snapshot-less session returns honest zero-edge state", async () => {
       const files = new LpFileListSource({ root: fixturesDir });
       const app = await buildApp({

@@ -17,10 +17,24 @@ namespace mdu.ui.telemetry.snapshot
     public class UISnapshotTriggers
     {
         private bool _viewHooked;
+        private bool _popupHooked;
         private bool _disabled;
         private float _lastCaptureTime = float.NegativeInfinity;
-        private string _lastViewId;
-        private int _lastNodeCount;
+        /// <summary>
+        /// Near-simultaneous duplicate-raise guard (per view id). Replaces the old
+        /// cross-cycle content dedupe (`view id + node count` vs. the last capture
+        /// ever): every view is pooled, so a re-opened cycle reuses the same runtime
+        /// id with an unchanged layout — that check suppressed the capture of every
+        /// open cycle after the first (timeline filmstrip/replica starved per view,
+        /// consecutive snackbars never captured).
+        /// </summary>
+        private string _lastGuardViewId;
+        private float _lastGuardTime = float.NegativeInfinity;
+
+        /// <summary>Two raises for the same view closer than this (unscaled seconds)
+        /// are one lifecycle boundary; normal UI raises exactly once per cycle, this
+        /// only defends against accidental double-fires on the same frame.</summary>
+        private const float DuplicateRaiseWindow = 0.1f;
 
         public void tick()
         {
@@ -47,6 +61,7 @@ namespace mdu.ui.telemetry.snapshot
             }
 
             ensureViewHook();
+            ensurePopupHook();
 
             if (config.hotkeyEnabled && hotkeyAllowed(config) && isHotkeyPressed(config.hotkey))
             {
@@ -71,7 +86,7 @@ namespace mdu.ui.telemetry.snapshot
             _viewHooked = true;
         }
 
-        private void onViewActivated(IView view)
+    private void onViewActivated(IView view)
         {
             TelemetryConfig config;
             try
@@ -88,8 +103,75 @@ namespace mdu.ui.telemetry.snapshot
             {
                 return;
             }
+            if (!raiseGuardAllows(view))
+            {
+                return;
+            }
 
             captureAsync(view, true, "view-transition").Forget();
+        }
+
+        /// <summary>
+        /// Popup-layer capture: every popup view (Dialog, Snackbar, …) that becomes
+        /// visible gets its own snapshot, so the timeline can build a filmstrip row
+        /// for it. A popup show raise is the start of a visibility cycle — one
+        /// capture per raise (only the near-simultaneous guard applies), so every
+        /// popup cycle gets at least its opening capture.
+        /// </summary>
+        private void ensurePopupHook()
+        {
+            if (_popupHooked)
+            {
+                return;
+            }
+
+            UIInteractions.onViewShown += onPopupShown;
+            _popupHooked = true;
+        }
+
+        private void onPopupShown(IView view)
+        {
+            TelemetryConfig config;
+            try
+            {
+                config = Telemetry.config;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+                return;
+            }
+
+            if (!config.enabled || !config.popupTrackingEnabled)
+            {
+                return;
+            }
+            if (view == null || view.layer != CanvasLayer.POPUP || config.isExcludedPopup(view))
+            {
+                return;
+            }
+            if (!raiseGuardAllows(view))
+            {
+                return;
+            }
+
+            captureAsync(view, false, "popup-shown").Forget();
+        }
+
+        /// <summary>Suppresses only near-simultaneous duplicate raises of the same
+        /// view (see <see cref="DuplicateRaiseWindow"/>); every further raise is a
+        /// new visibility cycle and must capture.</summary>
+        private bool raiseGuardAllows(IView view)
+        {
+            var viewId = string.IsNullOrEmpty(view.id) ? view.rectTransform?.GetInstanceID().ToString() : view.id;
+            if (!string.IsNullOrEmpty(viewId) && viewId == _lastGuardViewId &&
+                Time.unscaledTime - _lastGuardTime < DuplicateRaiseWindow)
+            {
+                return false;
+            }
+            _lastGuardViewId = viewId;
+            _lastGuardTime = Time.unscaledTime;
+            return true;
         }
 
         private async UniTask captureAsync(IUI root, bool respectRateLimit, string source)
@@ -110,19 +192,13 @@ namespace mdu.ui.telemetry.snapshot
                     return;
                 }
 
-                if (config.viewTransitionDedupe
-                    && snapshot.view != null
-                    && snapshot.view.id == _lastViewId
-                    && snapshot.nodes.Count == _lastNodeCount)
-                {
-                    return;
-                }
-
+                // One capture per visibility cycle — no cross-cycle content dedupe.
+                // (Pooled views re-open with the same runtime id and an unchanged
+                // node count, which the previous 'last view + node count' check
+                // turned into exactly one capture per view id, ever.)
                 var path = await UISnapshotExporter.exportToFileAsync(snapshot);
                 if (path != null)
                 {
-                    _lastViewId = snapshot.view?.id;
-                    _lastNodeCount = snapshot.nodes.Count;
                     Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
                 }
             }

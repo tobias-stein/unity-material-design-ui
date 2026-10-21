@@ -26,6 +26,49 @@ async function lpEvents(file: string): Promise<RawEvent[]> {
 }
 
 /** CSV-cell escaping exactly as InfluxDB quotes it (double-quote doubling). */
+/* ---------------------------------------------------------- table grouping */
+
+describe("recordsToRawEvents: result-table partitioning is not series identity", () => {
+  it("merges one-row-per-field rows even when Influx renders one table per _field", () => {
+    // Live regression (2026-10-20): without `group(columns: [])` the Flux
+    // response freshened a table per _field; keying events on `table` then
+    // split one ui_snapshot_taken point into fragments (hash-only, key-only…)
+    // and every snapshot resolution failed with `ledger key: (none)`.
+    const lpText = [
+      "#datatype,string,string,dateTime:RFC3339,string,string,string,string,string",
+      "#group,false,false,false,false,false,false,false,false,false",
+      "#default,_result,,,,,,,,",
+      ",result,table,_time,_value,_field,_measurement,session,view_id",
+      ",_result,0,2026-10-20T10:31:08.952712Z,snkey1,key,ui_snapshot_taken,0d953980858a4ede9e87a11764abdbcc,3bacd368868f45fca47a366ec6dc8cf3",
+      ",_result,1,2026-10-20T10:31:08.952712Z,snhash1,hash,ui_snapshot_taken,0d953980858a4ede9e87a11764abdbcc,3bacd368868f45fca47a366ec6dc8cf3",
+      ",_result,2,2026-10-20T10:31:08.952712Z,7,nodes,ui_snapshot_taken,0d953980858a4ede9e87a11764abdbcc,3bacd368868f45fca47a366ec6dc8cf3",
+    ].join("\n");
+
+    const fromCsv = recordsToRawEvents(parseAnnotatedCsv(lpText).records);
+    expect(fromCsv).toHaveLength(1);
+    expect(fromCsv[0]!.measurement).toBe(Measurements.UiSnapshotTaken);
+    expect(fromCsv[0]!.fields.key).toBe("snkey1");
+    expect(fromCsv[0]!.fields.hash).toBe("snhash1");
+    expect(fromCsv[0]!.fields.nodes).toBe(7);
+    expect(fromCsv[0]!.tags.view_id).toBe("3bacd368868f45fca47a366ec6dc8cf3");
+  });
+
+  it("keeps same-instant rows of different series separate", () => {
+    const lpText = [
+      "#datatype,string,string,dateTime:RFC3339,double,string,string,string,string,string",
+      "#group,false,false,false,false,false,false,false,false,false",
+      "#default,_result,,,,,,,,",
+      ",result,table,_time,_value,_field,_measurement,session,type,view_id",
+      ",_result,0,2026-10-20T10:31:08.952712Z,1,value,ui_event,s1,click,v1",
+      ",_result,1,2026-10-20T10:31:08.952712Z,1,value,ui_event,s1,close,v1",
+    ].join("\n");
+
+    const fromCsv = recordsToRawEvents(parseAnnotatedCsv(lpText).records);
+    expect(fromCsv).toHaveLength(2);
+    expect([...fromCsv.map((e) => e.tags.type)].sort()).toEqual(["click", "close"]);
+  });
+});
+
 function csvCell(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }

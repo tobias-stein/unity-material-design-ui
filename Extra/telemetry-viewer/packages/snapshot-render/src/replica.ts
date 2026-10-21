@@ -41,6 +41,14 @@ export interface StageOptions {
    * overlay stacking semantics, so the tool opts out.
    */
   zIndex?: boolean;
+  /**
+   * Composite overlay mode (telemetry viewer, layered replica): the stage
+   * paints nothing beyond captured node paint — no stage background, and the
+   * root "view" node never falls back to the palette background, so an
+   * unpainted popup root (snackbar) stays see-through over the base stage.
+   * Captured colors keep their alpha (dialog scrims).
+   */
+  transparentStage?: boolean;
 }
 
 /** Build (or rebuild) the full replica stage for a snapshot. */
@@ -66,7 +74,7 @@ export function buildReplicaStage(
   const height = root.rect?.height ?? 600;
   stage.style.width = `${width}px`;
   stage.style.height = `${height}px`;
-  stage.style.background = palette.background ?? "#fef7ff";
+  stage.style.background = options.transparentStage ? "transparent" : palette.background ?? "#fef7ff";
 
   for (const node of snapshot.nodes) {
     stage.appendChild(
@@ -148,7 +156,10 @@ export function createNodeElement(node: SnapshotNode, context: NodeContext): HTM
   else if (type === "Button") applyButtonShape(el, node);
 
   if (node.isView) {
-    el.style.background = background || context.palette.background || "transparent";
+    // Overlay mode keeps an unpainted popup root see-through; normal mode
+    // falls back to the palette background (full view backdrop).
+    const fallback = context.options.transparentStage ? "transparent" : context.palette.background || "transparent";
+    el.style.background = background || fallback;
   }
 
   switch (type) {
@@ -194,6 +205,93 @@ function applyOutline(
   el.style.borderWidth = `${width}px`;
   el.style.borderStyle = "solid";
   el.style.borderColor = color;
+}
+
+/* --------------------------------------------------------- overlay placement */
+
+/** The design space overlays are placed in — the popup layer's parent rect. */
+export interface OverlayViewport {
+  width: number;
+  height: number;
+}
+
+/**
+ * Canvas size in UI points from the snapshot's app info
+ * (`screenWidth / scaleFactor`). Null when the snapshot predates that info —
+ * callers fall back to the base replica's stage size.
+ */
+export function canvasViewportOf(snapshot: UISnapshot): OverlayViewport | null {
+  const app = snapshot.app ?? null;
+  const width = typeof app?.screenWidth === "number" && app.screenWidth > 0 ? app.screenWidth : null;
+  const height = typeof app?.screenHeight === "number" && app.screenHeight > 0 ? app.screenHeight : null;
+  const scale = typeof app?.scaleFactor === "number" && app.scaleFactor > 0 ? app.scaleFactor : 1;
+  if (width === null || height === null) return null;
+  return { width: width / scale, height: height / scale };
+}
+
+export interface OverlayPlacement {
+  /** CSS-space position of the popup root's top-left corner in the viewport. */
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** "anchor" = computed from the root node's captured anchor/pivot shape;
+   *  "center" = fallback when the anchor data is missing (legacy captures). */
+  mode: "anchor" | "center";
+}
+
+/**
+ * Where a popup snapshot's stage sits on top of a base (canvas-sized) stage.
+ *
+ * Popup snapshots capture *the popup's own subtree*, so the stage is sized to
+ * the popup itself — its on-screen position comes from the root node's
+ * captured anchor shape (pivot/anchorMin/anchorMax/anchoredPosition) mapped
+ * onto the parent rect (assumed canvas-sized: the popup layer hosts full-canvas
+ * views). Unity's anchor y-axis runs from the bottom; the exported node rects
+ * are already CSS top-down, so the formula keeps y-up internally and flips
+ * once at the end.
+ */
+export function overlayPlacementFor(snapshot: UISnapshot, viewport: OverlayViewport): OverlayPlacement {
+  const root = snapshot.nodes.find((node) => node.id === snapshot.rootId) ?? snapshot.nodes[0]!;
+  const width = root.rect?.width ?? 0;
+  const height = root.rect?.height ?? 0;
+
+  const anchor = root.anchor ?? null;
+  const pivotX = finiteOr(anchor?.pivotX, 0.5);
+  const pivotY = finiteOr(anchor?.pivotY, 0.5);
+  const anchorMinX = finiteOrNull(anchor?.anchorMinX);
+  const anchorMaxX = finiteOrNull(anchor?.anchorMaxX);
+  const anchorMinY = finiteOrNull(anchor?.anchorMinY);
+  const anchorMaxY = finiteOrNull(anchor?.anchorMaxY);
+  const anchoredX = finiteOr(anchor?.anchoredX, 0);
+  const anchoredY = finiteOr(anchor?.anchoredY, 0);
+
+  if (anchor !== null && anchorMinX !== null && anchorMaxX !== null && anchorMinY !== null && anchorMaxY !== null) {
+    // x is left→right like CSS; y runs bottom→top (Unity) until the flip.
+    const anchorX = ((anchorMinX + anchorMaxX) / 2) * viewport.width + anchoredX;
+    const anchorYUp = ((anchorMinY + anchorMaxY) / 2) * viewport.height + anchoredY;
+    const left = anchorX - pivotX * width;
+    const bottomUp = anchorYUp - pivotY * height;
+    const top = viewport.height - (bottomUp + height);
+    if (Number.isFinite(left) && Number.isFinite(top)) {
+      return { left, top, width, height, mode: "anchor" };
+    }
+  }
+  return {
+    left: (viewport.width - width) / 2,
+    top: (viewport.height - height) / 2,
+    width,
+    height,
+    mode: "center",
+  };
+}
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function finiteOr(value: number | null | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 /* -------------------------------------------------------------------- text */

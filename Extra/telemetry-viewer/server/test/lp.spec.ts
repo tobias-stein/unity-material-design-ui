@@ -105,3 +105,53 @@ describe("parseLpDocuments over the P0 fixture corpus", () => {
     expect(e.timestampNs / 1_000_000n).toBe(1769932800000n);
   });
 });
+
+describe("ui_snapshot_taken wire shape (Unity LineProtocolSerializer contract)", () => {
+  const shaKey = "snapshots/2026/10/20/UIDemoMainMenu(Clone)-20261020-100838.yaml";
+  const shaHash = "f7d3d4a7779357da44f209298e7a88155150bb75d2fbd23661877675ff013c03";
+  const session = "a4e816176fb54bda8ddcbd08f2dc0f8c";
+
+  /** Exactly what `serializeSnapshotTaken` must emit after the separator fix. */
+  const wellFormed =
+    `ui_snapshot_taken,session=${session},view=UIDemoMainMenu(Clone),view_id=dca8b6d508e74620b67fa2f8b582e39c ` +
+    `key="${shaKey}",hash="${shaHash}",nodes=95i,width=1920,height=1080,` +
+    'owner="Unity-MaterialDesign-UI",platform="OSXEditor",screen="1920x1080" 1792490918662325000';
+
+  it("parses a fully-formed snapshot ledger point with every field typed", () => {
+    const parsed = parseLpLine(wellFormed);
+    if (typeof parsed === "string") throw new Error(`should parse: ${parsed}`);
+    expect(parsed.measurement).toBe("ui_snapshot_taken");
+    expect(parsed.tags).toEqual([
+      ["session", session],
+      ["view", "UIDemoMainMenu(Clone)"],
+      ["view_id", "dca8b6d508e74620b67fa2f8b582e39c"],
+    ]);
+    expect(parsed.fields).toEqual([
+      ["key", { kind: "string", value: shaKey }],
+      ["hash", { kind: "string", value: shaHash }],
+      ["nodes", { kind: "int", value: 95 }],
+      ["width", { kind: "float", value: 1920 }],
+      ["height", { kind: "float", value: 1080 }],
+      ["owner", { kind: "string", value: "Unity-MaterialDesign-UI" }],
+      ["platform", { kind: "string", value: "OSXEditor" }],
+      ["screen", { kind: "string", value: "1920x1080" }],
+    ]);
+    expect(parsed.timestampNs).toBe(1792490918662325000n);
+
+    const { events, malformedCount } = parseLpDocuments([{ file: "snap.lp", content: `${wellFormed}\n` }]);
+    expect(malformedCount).toBe(0);
+    expect(events[0]!.fields).toMatchObject({ key: shaKey, hash: shaHash, nodes: 95, width: 1920, height: 1080 });
+    expect(events[0]!.tags.view_id).toBe("dca8b6d508e74620b67fa2f8b582e39c");
+  });
+
+  it("drops the fused tag/field shape Unity emitted before the separator fix", () => {
+    // Regression: the first field fused straight onto the tag set (no space),
+    // so the only space left was before the timestamp — the parser read the
+    // timestamp as the field section and rejected the whole line.
+    const fused = wellFormed.replace('view_id=dca8b6d508e74620b67fa2f8b582e39c key=', 'view_id=dca8b6d508e74620b67fa2f8b582e39ckey=');
+    const result = parseLpDocuments([{ file: "snap.lp", content: `${fused}\n` }]);
+    expect(result.events).toHaveLength(0);
+    expect(result.malformedCount).toBe(1);
+    expect(result.error?.code).toBe("MALFORMED_LINE");
+  });
+});

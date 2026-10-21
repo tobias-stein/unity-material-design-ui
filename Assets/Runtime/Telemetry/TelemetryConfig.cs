@@ -33,7 +33,7 @@ namespace mdu.ui.telemetry
         public bool viewTransitionEnabled = true;
         [Tooltip("Minimum seconds between two automatic transition captures.")]
         public float viewTransitionMinInterval = 5f;
-        [Tooltip("Skip writing when view id and node count are unchanged since the last capture.")]
+        [Tooltip("Snap one capture per near-simultaneous duplicate raise of the same view (one capture per visibility cycle is always kept). The old cross-cycle 'view id + node count' dedupe is gone — pooled views re-open with the same id, which starved re-opened cycles and consecutive snackbars of their captures.")]
         public bool viewTransitionDedupe = true;
 
         [Header("Output")]
@@ -57,6 +57,31 @@ namespace mdu.ui.telemetry
         public bool forceRebuildLayout = true;
         [Tooltip("Skip pooled (inactive, recycled) UI elements and their subtrees.")]
         public bool skipPooled = true;
+
+        [Header("Popup views (dialogs, snackbars)")]
+        [Tooltip("Emit view_open/view_close for popup-layer views (Dialog, Snackbar, …) " +
+                 "and capture their snapshots on show, so the timeline gets a filmstrip row per popup.")]
+        public bool popupTrackingEnabled = true;
+        [Tooltip("Popup view type names excluded from lifecycle tracking and snapshot capture.")]
+        public string[] popupExcludedViews = { "Tooltip" };
+
+        /// <summary>Whether this popup-layer view is excluded from tracking (type-name match against popupExcludedViews).</summary>
+        public bool isExcludedPopup(IView view)
+        {
+            if (view == null || popupExcludedViews == null || popupExcludedViews.Length == 0)
+            {
+                return false;
+            }
+            var name = view.GetType().Name;
+            foreach (var excluded in popupExcludedViews)
+            {
+                if (string.Equals(excluded, name, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         [Header("Snapshot ledger")]
         [Tooltip("Emit one ui_snapshot_taken point per successfully written snapshot file " +

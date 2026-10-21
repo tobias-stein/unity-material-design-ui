@@ -34,6 +34,8 @@ namespace mdu.ui.telemetry.events
                 appendTag(sb, "view", e.viewName);
                 appendTag(sb, "view_id", e.viewId);
             }
+            // Bounded tag (CanvasLayer enum names) so series growth stays linear.
+            appendTag(sb, "layer", e.layer);
             if (!string.IsNullOrEmpty(e.elementId))
             {
                 appendTag(sb, "element", e.elementId);
@@ -62,6 +64,10 @@ namespace mdu.ui.telemetry.events
         /// </summary>
         private static string serializeSnapshotTaken(TelemetryEvent e)
         {
+            // Field section shape (line protocol): `measurement[,tags] fields ts` —
+            // the FIRST field separates from the tag set with a single space, not
+            // a comma. Today's parser (telemetry-viewer `lp.ts`) also treats every
+            // fused tag/field line as malformed and drops the ledger point.
             var sb = new StringBuilder(256);
 
             sb.Append(Measurements.UiSnapshotTaken);
@@ -76,9 +82,9 @@ namespace mdu.ui.telemetry.events
             var hasField = false;
             hasField = appendField(sb, hasField, "key", e.storageKey);
             hasField = appendField(sb, hasField, "hash", e.fileHash);
-            hasField = appendField(sb, hasField, "nodes", e.nodeCount, CultureInfo.InvariantCulture);
-            hasField = appendField(sb, hasField, "width", e.screenWidth, "0.###");
-            hasField = appendField(sb, hasField, "height", e.screenHeight, "0.###");
+            hasField = appendIntegerField(sb, hasField, "nodes", e.nodeCount);
+            hasField = appendFloatField(sb, hasField, "width", e.screenWidth);
+            hasField = appendFloatField(sb, hasField, "height", e.screenHeight);
             hasField = appendField(sb, hasField, "owner", e.owner);
             hasField = appendField(sb, hasField, "platform", e.platform);
             hasField = appendField(sb, hasField, "screen", e.screen);
@@ -114,9 +120,11 @@ namespace mdu.ui.telemetry.events
         }
 
         /// <summary>
-        /// Appends a string field (<c>&lt;sep&gt;key="value"</c> with backslash and
-        /// quote escaping) when the value is present. Returns whether a field now
-        /// exists (so callers can separate the first field by a space, not a comma).
+        /// Appends a string field with separator handling: the FIRST field of a
+        /// section separates from the tag set with a single space, later fields
+        /// with a comma. String fields are written as `key="value"` with
+        /// backslash and quote escaping; absent values are skipped. Returns
+        /// whether a field now exists.
         /// </summary>
         private static bool appendField(StringBuilder sb, bool hasField, string key, string value)
         {
@@ -125,11 +133,7 @@ namespace mdu.ui.telemetry.events
                 return hasField;
             }
 
-            if (hasField)
-            {
-                sb.Append(',');
-            }
-
+            sb.Append(hasField ? ',' : ' ');
             sb.Append(key).Append("=\"");
             for (var i = 0; i < value.Length; i++)
             {
@@ -145,20 +149,48 @@ namespace mdu.ui.telemetry.events
             return true;
         }
 
-        /// <summary> Int field variant of <see cref="appendField(StringBuilder,bool,string,string)"/>. </summary>
-        private static bool appendField(StringBuilder sb, bool hasField, string key, int? value, IFormatProvider format)
+        /// <summary>
+        /// Int field variant of <see cref="appendField(StringBuilder,bool,string,string)"/>:
+        /// line-protocol integer syntax `key=42i` (the .lp parser projects nodes
+        /// only from int/uint field values).
+        /// </summary>
+        private static bool appendIntegerField(StringBuilder sb, bool hasField, string key, int? value)
         {
-            return value.HasValue
-                ? appendField(sb, hasField, key, value.Value.ToString(format))
-                : hasField;
+            if (!value.HasValue)
+            {
+                return hasField;
+            }
+
+            sb.Append(hasField ? ',' : ' ');
+            sb.Append(key).Append('=').Append(value.Value.ToString(CultureInfo.InvariantCulture)).Append('i');
+            return true;
         }
 
-        /// <summary> Float field variant of <see cref="appendField(StringBuilder,bool,string,string)"/>. </summary>
-        private static bool appendField(StringBuilder sb, bool hasField, string key, float? value, string format)
+        /// <summary>
+        /// Float field variant of <see cref="appendField(StringBuilder,bool,string,string)"/>:
+        /// unquoted line-protocol float `width=1920` (invariant culture, no
+        /// scientific notation; the .lp parser projects width/height only from
+        /// numeric field values).
+        /// </summary>
+        private static bool appendFloatField(StringBuilder sb, bool hasField, string key, float? value)
         {
-            return value.HasValue
-                ? appendField(sb, hasField, key, value.Value.ToString(format, CultureInfo.InvariantCulture))
-                : hasField;
+            if (!value.HasValue)
+            {
+                return hasField;
+            }
+
+            sb.Append(hasField ? ',' : ' ');
+            sb.Append(key).Append('=').Append(presentFloat(value.Value));
+            return true;
+        }
+
+        private static string presentFloat(float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                return "0";
+            }
+            return value.ToString("0.######", CultureInfo.InvariantCulture);
         }
     }
 }

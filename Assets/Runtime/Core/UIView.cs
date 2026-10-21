@@ -75,6 +75,9 @@ namespace mdu.ui
 
         private ViewState _state = ViewState.CREATED;
 
+        /// <summary>True between a show() and the first hide()/close() of that cycle — guards the telemetry raise so a view lifecycle is emitted exactly once.</summary>
+        private bool _viewCycleOpen;
+
         public new void Awake()
         {
             base.Awake();
@@ -96,6 +99,14 @@ namespace mdu.ui
             UnityEngine.Debug.Log($"{this} shown.");
             onShow?.Invoke(this);
 
+            // Telemetry lifecycle (one raise per visible cycle — hide()/close()
+            // later in the same cycle end it exactly once).
+            if (!_viewCycleOpen)
+            {
+                _viewCycleOpen = true;
+                UIInteractions.raiseViewShown(this);
+            }
+
             return UniTask.CompletedTask;
         }
 
@@ -111,18 +122,38 @@ namespace mdu.ui
             _state = ViewState.HIDDEN;
             UnityEngine.Debug.Log($"{this} hidden.");
             onHide?.Invoke(this);
+
+            if (_viewCycleOpen)
+            {
+                _viewCycleOpen = false;
+                UIInteractions.raiseViewEnded(this);
+            }
         }
 
         public virtual void close()
         {
             UIInteractions.close(this);
             onClose?.Invoke(this);
+
+            if (_viewCycleOpen)
+            {
+                _viewCycleOpen = false;
+                UIInteractions.raiseViewEnded(this);
+            }
         }
 
         public override void Dispose()
         {
             base.Dispose();
-            
+
+            // Disposing while still visible (e.g. ViewManager.closeAll) closes the
+            // telemetry view-cycle honestly instead of leaving a dangling span.
+            if (_viewCycleOpen)
+            {
+                _viewCycleOpen = false;
+                UIInteractions.raiseViewEnded(this);
+            }
+
             onShow = onHide = onClose = null;
 
             UnityEngine.Debug.Log($"{this} destroyed.");

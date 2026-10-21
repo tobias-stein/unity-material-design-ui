@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
 
@@ -7,7 +8,7 @@ namespace mdu.ui.telemetry.events
     /// <summary>
     /// Telemetry event feature: owns the session id (generated at bootstrap,
     /// resettable at runtime via <c>Telemetry.newSession()</c>), converts
-    /// <see cref="UIInteractions"/> raises and active-view changes into
+    /// <see cref="UIInteractions"/> raises and view lifecycle changes into
     /// timestamped, view-correlated points and hands them to the sink.
     /// Wired and ticked by <see cref="Telemetry"/>; failures must never escape.
     /// </summary>
@@ -22,7 +23,24 @@ namespace mdu.ui.telemetry.events
         private IView _activeView;
         private string _activeViewId;
         private string _activeViewName;
-        private DateTime _activeViewOpenedUtc;
+
+        /// <summary>
+        /// Per-view lifecycle state: every view (main views and popup-layer views
+        /// like Dialog/Snackbar) opens a span on show and closes it on the first
+        /// of hide/close. Keyed by view reference; the runtime emits
+        /// <c>view_open</c>/<c>view_close</c> with the view's canvas layer so the
+        /// viewer can give popups their own timeline tracks.
+        /// </summary>
+        private sealed class OpenViewSpan
+        {
+            public IView view;
+            public string viewId;
+            public string viewName;
+            public string layer;
+            public DateTime openedUtc;
+        }
+
+        private readonly Dictionary<IView, OpenViewSpan> _openViewSpans = new Dictionary<IView, OpenViewSpan>();
 
         /// <summary>
         /// Events go to the InfluxDB outbox when <c>influxEnabled</c> (pending
@@ -39,6 +57,8 @@ namespace mdu.ui.telemetry.events
         public EventCollector()
         {
             UIInteractions.onInteraction += onInteraction;
+            UIInteractions.onViewShown += onViewShown;
+            UIInteractions.onViewEnded += onViewEnded;
             Application.quitting += onQuitting;
 
             _sessionId = Guid.NewGuid().ToString("N");
@@ -58,13 +78,13 @@ namespace mdu.ui.telemetry.events
             var now = DateTime.UtcNow;
             var enabled = Telemetry.config.eventsEnabled;
 
-            if (enabled && _activeView != null)
-            {
-                closeActiveView(now);
-            }
-
+            List<OpenViewSpan> reopened = null;
             if (enabled)
             {
+                // Close every still-open view span under the old session (dwell
+                // preserved), then re-open them under the new session id so
+                // timelines stay continuous across the switch.
+                reopened = endAllViewSpans(now);
                 writeEvent(Measurements.Session, EventTypes.SessionEnd, now, null, null, null, null, null, null);
                 flushAll();
             }
@@ -75,7 +95,7 @@ namespace mdu.ui.telemetry.events
             if (enabled)
             {
                 startSession(now);
-                trackActiveView(now); // re-open the current view under the new session
+                reopenViewSpans(reopened, now); // re-open the visible views under the new session
             }
         }
 
@@ -143,16 +163,60 @@ namespace mdu.ui.telemetry.events
 
             var element = interaction.element;
 
-            // Correlate with the view the element belongs to; for non-view
-            // elements fall back to the tracked / top-of-stack view.
-            var view = element as IView ?? _activeView ?? resolveTopView();
+            // Correlate with the view the element belongs to: the element itself
+            // (view close/dismiss), then the innermost open view containing it
+            // (popup elements are context-owned, not top-of-stack), then the
+            // tracked / top-of-stack view.
+            var view = resolveEventView(element);
             getViewInfo(view, out var viewId, out var viewName);
 
             writeEvent(Measurements.UiEvent, type, DateTime.UtcNow, viewId, viewName,
                 element?.id, element?.GetType().FullName, flag, null);
+
+            // A close interaction raised *by* a view (Dialog.close, a view's close
+            // path) also ends that view's timeline span. raiseViewEnded may fire
+            // for the same cycle too — the open-span bookkeeping dedupes.
+            if (interaction.type == UIInteractionType.Close && element is IView closedView)
+            {
+                closeViewSpan(closedView, DateTime.UtcNow);
+            }
         }
 
-        /// <summary> Emits view_open/view_close points whenever the top-of-stack view changes. </summary>
+        /// <summary>
+        /// The view an interaction belongs to. Popup views never become
+        /// top-of-stack, so an element inside a dialog/snackbar must resolve to
+        /// that popup — otherwise its events would land on the host view's track.
+        /// </summary>
+        private IView resolveEventView(IUI element)
+        {
+            if (element is IView asView && !(asView is UnityEngine.Object destroyed && destroyed == null))
+            {
+                return asView;
+            }
+
+            var transform = element?.rectTransform;
+            if (transform != null)
+            {
+                foreach (var open in _openViewSpans.Values)
+                {
+                    var root = open.view != null ? open.view.rectTransform : null;
+                    if (root != null && transform.IsChildOf(root))
+                    {
+                        return open.view;
+                    }
+                }
+            }
+
+            return _activeView ?? resolveTopView();
+        }
+
+        /// <summary>
+        /// Keeps the interaction-attribution fallback pointed at the top-of-stack
+        /// view. Lifecycle points are emitted per-view from the
+        /// <see cref="UIInteractions.onViewShown"/>/<c>onViewEnded</c> raises, so
+        /// this stays silent — every view gets exactly one open/close pair per
+        /// visible cycle, popups included.
+        /// </summary>
         private void trackActiveView(DateTime now)
         {
             var top = resolveTopView();
@@ -161,47 +225,140 @@ namespace mdu.ui.telemetry.events
                 return;
             }
 
-            if (_activeView != null)
+            _activeView = top;
+            getViewInfo(top, out _activeViewId, out _activeViewName);
+        }
+
+        /// <summary> Opens the view's timeline span (type = view_open, layer tag attached). </summary>
+        private void onViewShown(IView view)
+        {
+            if (!Telemetry.config.eventsEnabled || view == null)
             {
-                closeActiveView(now);
+                return;
             }
 
-            if (top != null)
+            if (view.layer == CanvasLayer.POPUP && !popupTrackingAllowed(view))
             {
-                openActiveView(top, now);
+                return;
+            }
+
+            if (_openViewSpans.ContainsKey(view))
+            {
+                return; // defensive: already open (duplicate show raise)
+            }
+
+            var now = DateTime.UtcNow;
+            getViewInfo(view, out var viewId, out var viewName);
+            var span = new OpenViewSpan
+            {
+                view = view,
+                viewId = viewId,
+                viewName = viewName,
+                layer = view.layer.ToString(),
+                openedUtc = now
+            };
+            _openViewSpans[view] = span;
+
+            writeEvent(Measurements.UiEvent, EventTypes.ViewOpen, now, viewId, viewName,
+                null, null, null, null, span.layer);
+
+            if (view.layer != CanvasLayer.POPUP)
+            {
+                // Non-popup views also refresh the attribution fallback.
+                _activeView = view;
+                _activeViewId = viewId;
+                _activeViewName = viewName;
             }
         }
 
-        private void openActiveView(IView view, DateTime now)
+        /// <summary> Closes the view's timeline span (type = view_close + dwell). </summary>
+        private void onViewEnded(IView view)
         {
-            _activeView = view;
-            getViewInfo(view, out _activeViewId, out _activeViewName);
-            _activeViewOpenedUtc = now;
+            if (!Telemetry.config.eventsEnabled || view == null)
+            {
+                return;
+            }
 
-            writeEvent(Measurements.UiEvent, EventTypes.ViewOpen, now, _activeViewId, _activeViewName,
-                null, null, null, null);
+            closeViewSpan(view, DateTime.UtcNow);
         }
 
-        private void closeActiveView(DateTime now)
+        private void closeViewSpan(IView view, DateTime now)
         {
-            var dwell = Math.Max(0, (now - _activeViewOpenedUtc).TotalSeconds);
+            if (!_openViewSpans.TryGetValue(view, out var span))
+            {
+                return; // not open (already ended, or a legacy close raise)
+            }
 
-            writeEvent(Measurements.UiEvent, EventTypes.ViewClose, now, _activeViewId, _activeViewName,
-                null, null, null, dwell);
-
-            _activeView = null;
-            _activeViewId = null;
-            _activeViewName = null;
+            _openViewSpans.Remove(view);
+            var dwell = Math.Max(0, (now - span.openedUtc).TotalSeconds);
+            writeEvent(Measurements.UiEvent, EventTypes.ViewClose, now, span.viewId, span.viewName,
+                null, null, null, dwell, span.layer);
         }
 
-        private void onQuitting()
+        /// <summary> Closes every open span; returns the spans whose view is still alive (for session continuity). </summary>
+        private List<OpenViewSpan> endAllViewSpans(DateTime now)
+        {
+            var alive = new List<OpenViewSpan>();
+            foreach (var view in new List<IView>(_openViewSpans.Keys))
+            {
+                if (_openViewSpans.TryGetValue(view, out var span) &&
+                    !(view is UnityEngine.Object destroyed && destroyed == null))
+                {
+                    alive.Add(span);
+                }
+                closeViewSpan(view, now);
+            }
+            return alive;
+        }
+
+        /// <summary> Re-opens previously open spans under the new session (after <c>newSession</c>). </summary>
+        private void reopenViewSpans(List<OpenViewSpan> reopened, DateTime now)
+        {
+            if (reopened == null)
+            {
+                return;
+            }
+
+            foreach (var span in reopened)
+            {
+                if (span.view is UnityEngine.Object destroyed && destroyed == null)
+                {
+                    continue;
+                }
+
+                span.openedUtc = now;
+                _openViewSpans[span.view] = span;
+                writeEvent(Measurements.UiEvent, EventTypes.ViewOpen, now, span.viewId, span.viewName,
+                    null, null, null, null, span.layer);
+            }
+        }
+
+        private bool popupTrackingAllowed(IView view)
+        {
+            var config = Telemetry.config;
+            return config.popupTrackingEnabled && !config.isExcludedPopup(view);
+        }
+
+        /// <summary>
+        /// Play-mode exit / real quit: closes every open view span (their dwell
+        /// reaches the export), writes the session end point and persists every
+        /// buffered event to disk. Re-entry (play-mode exit followed by the
+        /// real quit handler) stays harmless: the end point is only written
+        /// while a session is actually armed.
+        /// </summary>
+        public void endForExit()
         {
             try
             {
-                if (_activeView != null && Telemetry.config.eventsEnabled)
+                if (Telemetry.config.eventsEnabled)
                 {
-                    // Close the still-open view so its dwell reaches the export.
-                    closeActiveView(DateTime.UtcNow);
+                    endAllViewSpans(DateTime.UtcNow);
+                    if (_sessionStartRecorded)
+                    {
+                        writeEvent(Measurements.Session, EventTypes.SessionEnd, DateTime.UtcNow,
+                            null, null, null, null, null, null);
+                        _sessionStartRecorded = false;
+                    }
                 }
 
                 flushAll();
@@ -210,6 +367,11 @@ namespace mdu.ui.telemetry.events
             {
                 Debug.LogException(ex);
             }
+        }
+
+        private void onQuitting()
+        {
+            endForExit();
         }
 
         /// <summary>
@@ -277,7 +439,7 @@ namespace mdu.ui.telemetry.events
 
         private void writeEvent(string measurement, string type, DateTime now,
             string viewId, string viewName, string elementId, string elementTypeName,
-            bool? flag, double? dwellSeconds)
+            bool? flag, double? dwellSeconds, string layer = null)
         {
             activeSink.write(new TelemetryEvent
             {
@@ -290,7 +452,8 @@ namespace mdu.ui.telemetry.events
                 elementId = elementId,
                 elementTypeName = elementTypeName,
                 flag = flag,
-                dwellSeconds = dwellSeconds
+                dwellSeconds = dwellSeconds,
+                layer = layer
             });
         }
 
@@ -333,11 +496,21 @@ namespace mdu.ui.telemetry.events
         /// <summary> Same convention as UISnapshotBuilder so event view names match snapshot view names. </summary>
         private static string cleanName(string name)
         {
-            const string cloneSuffix = " (Clone)";
             if (string.IsNullOrEmpty(name))
             {
                 return name;
             }
+
+            // Unity's own Object names carry " (Clone)" (with a leading space);
+            // runtime views are instantiated from prefabs without it. Strip both
+            // so every export reports the prefab name.
+            const string spacedSuffix = " (Clone)";
+            const string cloneSuffix = "(Clone)";
+            if (name.EndsWith(spacedSuffix, StringComparison.Ordinal))
+            {
+                return name.Substring(0, name.Length - spacedSuffix.Length);
+            }
+
             return name.EndsWith(cloneSuffix, StringComparison.Ordinal)
                 ? name.Substring(0, name.Length - cloneSuffix.Length)
                 : name;

@@ -14,6 +14,19 @@
  */
 import type { RawEvent, Session, SessionViewSpan, SnapshotLedgerEntry, SourceId } from "../domain.js";
 
+/** Interaction element types that mark the event's view as a popup view. */
+const POPUP_ELEMENT_TYPES = ["mdu.ui.Snackbar", "mdu.ui.Dialog"];
+
+/** Popup marker for legacy inference (view types never tracked by old runtimes). */
+function isPopupAttribution(event: RawEvent): boolean {
+  const elementType = event.tags.element_type ?? "";
+  for (const prefix of POPUP_ELEMENT_TYPES) {
+    if (elementType.startsWith(prefix)) return true;
+  }
+  const view = event.tags.view ?? "";
+  return view === "Snackbar" || view === "Dialog";
+}
+
 /** Injection seam reserved for later phases (P2+ snapshot enrichment). */
 export interface ProjectionHooks {
   /**
@@ -43,6 +56,8 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
     views: SessionViewSpan[];
     /** view key → span awaiting its close event (for dwell pairing). */
     pendingSpans: Map<string, SessionViewSpan>;
+    /** view_id → attribution candidates (first/last event, popup marker) for legacy popup inference. */
+    candidates: Map<string, { view: string; firstNs: bigint; lastNs: bigint; popup: boolean }>;
     snapshots: SnapshotLedgerEntry[];
     eventCountsByType: Map<string, number>;
   }
@@ -65,6 +80,7 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
         screen: null,
         views: [],
         pendingSpans: new Map(),
+        candidates: new Map(),
         snapshots: [],
         eventCountsByType: new Map(),
       };
@@ -76,6 +92,28 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
   const seen = (acc: Accumulator, ns: bigint): void => {
     if (acc.firstNs === null || ns < acc.firstNs) acc.firstNs = ns;
     if (acc.lastNs === null || ns > acc.lastNs) acc.lastNs = ns;
+  };
+
+  /**
+   * Records one attribution candidate for legacy popup spans: popup views
+   * (Dialog/Snackbar) never emitted view_open/view_close on old runtimes —
+   * they only show up as interaction events attributed to their own view_id.
+   */
+  const updateCandidate = (acc: Accumulator, viewId: string, event: RawEvent): void => {
+    let candidate = acc.candidates.get(viewId);
+    if (candidate === undefined) {
+      acc.candidates.set(viewId, {
+        view: event.tags.view ?? "",
+        firstNs: event.timestampNs,
+        lastNs: event.timestampNs,
+        popup: isPopupAttribution(event),
+      });
+      return;
+    }
+    if (event.timestampNs < candidate.firstNs) candidate.firstNs = event.timestampNs;
+    if (event.timestampNs > candidate.lastNs) candidate.lastNs = event.timestampNs;
+    if (candidate.view === "" && event.tags.view) candidate.view = event.tags.view;
+    if (isPopupAttribution(event)) candidate.popup = true;
   };
 
   for (const event of events) {
@@ -103,9 +141,14 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
       const type = event.tags.type ?? "";
       acc.eventCountsByType.set(type, (acc.eventCountsByType.get(type) ?? 0) + 1);
 
+      const viewId = event.tags.view_id ?? null;
+      if (viewId !== null && viewId !== "") {
+        updateCandidate(acc, viewId, event);
+      }
+
       if (type === "view_open" || type === "view_close") {
         const view = event.tags.view ?? "";
-        const viewId = event.tags.view_id ?? null;
+        const layer = event.tags.layer ?? null;
         const spanKey = `${view}\u0000${viewId ?? ""}`;
         if (type === "view_open") {
           // An open while a previous span with the same identity is still
@@ -122,6 +165,7 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
             openNs: event.timestampNs,
             closeNs: null,
             dwellSeconds: null,
+            layer,
           };
           acc.views.push(span);
           acc.pendingSpans.set(spanKey, span);
@@ -143,6 +187,7 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
               openNs: event.timestampNs,
               closeNs: event.timestampNs,
               dwellSeconds: event.fields.dwell ?? 0,
+              layer,
             });
           }
         }
@@ -173,6 +218,23 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
 
   const projected: Session[] = [];
   for (const [id, acc] of sessions) {
+    // Legacy popup spans: candidates flagged as popup views that never received
+    // a lifecycle pair get a synthesized span from their first attributed event
+    // to their last (auto-dismissed snackbars with no interaction become an
+    // honest degenerate span at the close event). Never dropped.
+    for (const [viewId, candidate] of acc.candidates) {
+      if (!candidate.popup) continue;
+      if (acc.views.some((span) => span.viewId === viewId)) continue;
+      acc.views.push({
+        view: candidate.view || viewId,
+        viewId,
+        openNs: candidate.firstNs,
+        closeNs: candidate.lastNs,
+        dwellSeconds: Number(candidate.lastNs - candidate.firstNs) / 1e9,
+        layer: null,
+      });
+    }
+
     const boundsEnd = acc.endNs ?? acc.lastNs;
     const boundsStart = acc.startNs ?? acc.firstNs;
     projected.push({

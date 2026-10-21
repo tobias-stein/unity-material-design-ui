@@ -37,9 +37,27 @@ namespace mdu.ui
     {
         public static event Action<UIInteraction> onInteraction;
 
+        /// <summary>
+        /// Raised when a view became visible (from <see cref="UIView{TView,TData}.show"/>,
+        /// covering every view class including popups). Telemetry opens the view's
+        /// timeline span here.
+        /// </summary>
+        public static event Action<IView> onViewShown;
+
+        /// <summary>
+        /// Raised once per show-cycle when the view is no longer visible — from
+        /// <c>hide()</c> (covered) or <c>close()</c> (dismissed/destroyed), whichever
+        /// fires first. Telemetry closes the view's timeline span here.
+        /// </summary>
+        public static event Action<IView> onViewEnded;
+
         public static bool hasListeners => onInteraction != null;
 
         public static void raise(UIInteraction interaction) => onInteraction?.Invoke(interaction);
+
+        public static void raiseViewShown(IView view) => onViewShown?.Invoke(view);
+
+        public static void raiseViewEnded(IView view) => onViewEnded?.Invoke(view);
 
         public static void click(IUI element) =>
             onInteraction?.Invoke(new UIInteraction(UIInteractionType.Click, element));

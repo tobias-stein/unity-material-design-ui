@@ -16,3 +16,4 @@ export * from "./normalize.js";
 export * from "./replica.js";
 export * from "./flex.js";
 export * from "./minimap.js";
+export * from "./composite.js";

@@ -1,4 +1,5 @@
 using System;
+using Cysharp.Threading.Tasks;
 using mdu.ui;
 using UnityEngine;
 using UnityEngine.Assertions;
@@ -75,18 +76,22 @@ namespace mdu
 
         public override void close()
         {
-            UIInteractions.close(this);
+            // Route through the base lifecycle: it raises UIInteractions.close,
+            // the onClose event and the telemetry view-cycle end (exactly once).
+            base.close();
             Dispose();
         }
         
         public static void open(string title, string text, bool persistent = false)
         {
-            open(new DialogData
+            openAsync(new DialogData
             {
                 title = title,
                 text = text,
-                persistent = persistent   
-            });
+                persistent = persistent
+            })
+            .ContinueWith(instance => instance.show())
+            .Forget();
         }
     }
 }

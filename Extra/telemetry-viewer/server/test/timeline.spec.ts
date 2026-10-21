@@ -179,3 +179,82 @@ describe("timeline frame", () => {
     expect(nsToExactMs("1792319289999504600")).toBeCloseTo(1792319289999.5046, 4);
   });
 });
+
+describe("timeline rows (NLE track packing)", () => {
+  const baseNs = (ms: number): string => `${(BigInt(1768471200000 + ms) * 1_000_000n).toString()}`;
+
+  const lifecyleLp = [
+    `session,session=rows,type=start value=1i ${baseNs(0)}`,
+    // Main view: row 0 across the whole session.
+    `ui_event,session=rows,type=view_open,view=Main,view_id=main1,layer=DEFAULT value=1i ${baseNs(1000)}`,
+    `ui_event,session=rows,type=click,view=Main,view_id=main1,element=e1,element_type=mdu.ui.Button value=1i ${baseNs(2000)}`,
+    // Dialog popup on top of Main: overlapping → row 1.
+    `ui_event,session=rows,type=view_open,view=Dialog,view_id=dlg1,layer=POPUP value=1i ${baseNs(3000)}`,
+    `ui_event,session=rows,type=click,view=Dialog,view_id=dlg1,element=btn,element_type=mdu.ui.Button value=1i ${baseNs(4000)}`,
+    `ui_event,session=rows,type=close,view=Dialog,view_id=dlg1,element=dlg1,element_type=mdu.Dialog value=1i ${baseNs(4500)}`,
+    `ui_event,session=rows,type=view_close,view=Dialog,view_id=dlg1,layer=POPUP value=1i,dwell=1.6 ${baseNs(4600)}`,
+    `ui_event,session=rows,type=view_close,view=Main,view_id=main1,layer=DEFAULT value=1i,dwell=4 ${baseNs(5000)}`,
+    // Legacy Snackbar: no lifecycle pair — interaction only (inference source).
+    `ui_event,session=rows,type=close,view=Snackbar,view_id=sb1,element=sb1,element_type=mdu.ui.Snackbar value=1i ${baseNs(6000)}`,
+    `session,session=rows,type=end value=1i ${baseNs(6500)}`,
+  ].join("\n");
+
+  it("packs spans into minimal rows: same view shares a row, overlapping views split, rows get reused", async () => {
+    const events = parseLpDocuments([{ file: "rows.lp", content: `${lifecyleLp}\n` }]).events;
+    const session = projectSessions(events)[0]!;
+    const frame = buildTimelineFrame(session, events.filter((e) => e.tags.session === "rows"));
+
+    // Main [1s,5s] row 0 · Dialog [3s,4.6s] overlaps → row 1 · Snackbar
+    // inferred [6s,6s] reuses row 0 (free again, minimal track count).
+    expect(frame.viewSpans).toHaveLength(3);
+    expect(frame.viewSpans.map((span) => `#${span.index} ${span.view} kind=${span.kind} row=${span.row}`)).toEqual([
+      "#0 Main kind=view row=0",
+      "#1 Dialog kind=popup row=1",
+      "#2 Snackbar kind=inferred row=0",
+    ]);
+    expect(frame.rowCount).toBe(2);
+  });
+
+  it("places events on their view's span (spanId) incl. legacy popup attribution", async () => {
+    const events = parseLpDocuments([{ file: "rows.lp", content: `${lifecyleLp}\n` }]).events;
+    const session = projectSessions(events)[0]!;
+    const frame = buildTimelineFrame(session, events.filter((e) => e.tags.session === "rows"));
+
+    const spans = (view: string) => frame.viewSpans.filter((span) => span.view === view).map((span) => span.index);
+    const mainSpan = spans("Main")[0]!;
+    const dialogSpan = spans("Dialog")[0]!;
+    const snackbarSpan = spans("Snackbar")[0]!;
+
+    const eventsOfType = (type: string, view: string | null) =>
+      frame.events.filter((event) => event.type === type && event.view === view);
+
+    // Main's lifecycle marbles land on Main's span.
+    for (const event of [...eventsOfType("view_open", "Main"), ...eventsOfType("view_close", "Main")]) {
+      expect(event.spanId).toBe(mainSpan);
+    }
+    // Dialog's click + close + lifecycle pair land on the dialog span.
+    for (const event of eventsOfType("click", "Dialog")) {
+      expect(event.viewId).toBe("dlg1"); // popup scenes attribute to the popup itself
+      expect(event.spanId).toBe(dialogSpan);
+    }
+    for (const event of [...eventsOfType("close", "Dialog"), ...eventsOfType("view_open", "Dialog")]) {
+      expect(event.spanId).toBe(dialogSpan);
+    }
+    // Legacy snackbar close → the inferred span.
+    expect(eventsOfType("close", "Snackbar")[0]!.spanId).toBe(snackbarSpan);
+    // Session points never carry a view → no span placement.
+    expect(frame.events.every((event) => event.type === "start" ? event.viewId === null : true)).toBe(true);
+  });
+
+  it("legacy popup inference synthesizes spans from attributed interactions (no lifecycle pairs)", async () => {
+    const events = parseLpDocuments([{ file: "rows.lp", content: `${lifecyleLp}\n` }]).events;
+    const session = projectSessions(events)[0]!;
+
+    // Main + Dialog have runtime pairs; Snackbar is inferred from its close event.
+    expect(session.views.map((span) => span.view)).toEqual(["Main", "Dialog", "Snackbar"]);
+    const snackbar = session.views.find((span) => span.view === "Snackbar")!;
+    expect(snackbar.viewId).toBe("sb1");
+    expect(snackbar.layer).toBeNull();
+    expect(Number(snackbar.closeNs - snackbar.openNs) / 1e9).toBeCloseTo(0, 9); // degenerate, honest
+  });
+});

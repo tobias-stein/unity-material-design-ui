@@ -658,11 +658,21 @@ namespace mdu.ui.telemetry.snapshot
 
         private static string cleanName(string name)
         {
-            const string cloneSuffix = " (Clone)";
             if (string.IsNullOrEmpty(name))
             {
                 return name;
             }
+
+            // Unity's own Object names carry " (Clone)" (with a leading space);
+            // runtime views are instantiated from prefabs without it. Strip both
+            // so every export reports the prefab name.
+            const string spacedSuffix = " (Clone)";
+            const string cloneSuffix = "(Clone)";
+            if (name.EndsWith(spacedSuffix, StringComparison.Ordinal))
+            {
+                return name.Substring(0, name.Length - spacedSuffix.Length);
+            }
+
             return name.EndsWith(cloneSuffix, StringComparison.Ordinal)
                 ? name.Substring(0, name.Length - cloneSuffix.Length)
                 : name;

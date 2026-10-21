@@ -54,6 +54,7 @@ const EVENT_COLUMNS = [
   "view_id",
   "element",
   "element_type",
+  "layer",
 ] as const;
 
 export class FluxInfluxSource implements SourceProvider {
@@ -256,6 +257,16 @@ const EVENT_MEASUREMENT_SANITIZER = [
 ] as const;
 
 const EVENT_QUERY_TAIL = [
+  // A single result table (promised in the buildFlux docstring): collapse every
+  // series with `group(columns: [])`. Two prerequisites:
+  // 1. `_value` must be cast to string first — one table now mixes field types
+  //    across series (string key/hash, int nodes, float width), and Flux
+  //    rejects mixed `_value` types within a table ("cannot group integer and
+  //    float types together"). The consumer (`applyFieldValue`) coerces back.
+  // 2. `recordsToRawEvents` keys events WITHOUT the CSV table id (see there) —
+  //    otherwise each per-field table would split a point into fragments.
+  `    |> map(fn: (r) => ({ r with _value: string(v: r._value) }))`,
+  `    |> group(columns: [])`,
   `    |> keep(columns: [${EVENT_COLUMNS.map((c) => fluxString(c)).join(", ")}])`,
   `    |> sort(columns: ["_time", "_field"])`,
 ] as const;
@@ -277,8 +288,12 @@ export function fluxTime(ns: bigint): string {
 /**
  * Group one-row-per-field CSV rows into normalized raw events.
  * Rows are keyed by (measurement, timestamp, session, type, view, view_id,
- * element, element_type); the first field-bearing row wins on duplicates so
- * like-for-like output matches the `.lp` parser.
+ * element, element_type) — the full series identity; the first field-bearing
+ * row wins on duplicates so like-for-like output matches the `.lp` parser.
+ * The CSV `table`/`result` columns are deliberately NOT part of the key: how
+ * Influx partitions rows across result tables is an output-detail (one table
+ * per field is possible), not a series identity — keying on it splits every
+ * ledger point into per-field fragments.
  */
 export function recordsToRawEvents(records: CsvRecord[]): RawEvent[] {
   const events = new Map<string, RawEvent>();
@@ -297,8 +312,7 @@ export function recordsToRawEvents(records: CsvRecord[]): RawEvent[] {
       record.view_id ?? "",
       record.element ?? "",
       record.element_type ?? "",
-      String(record.table ?? ""),
-      String(record.result ?? ""),
+      record.layer ?? "",
     ].join("\u0000");
 
     let event = events.get(key);
@@ -314,6 +328,9 @@ export function recordsToRawEvents(records: CsvRecord[]): RawEvent[] {
           ...(record.element !== undefined && record.element !== null ? { element: String(record.element) } : {}),
           ...(record.element_type !== undefined && record.element_type !== null
             ? { element_type: String(record.element_type) }
+            : {}),
+          ...(record.layer !== undefined && record.layer !== null
+            ? { layer: String(record.layer) }
             : {}),
         },
         fields: {},

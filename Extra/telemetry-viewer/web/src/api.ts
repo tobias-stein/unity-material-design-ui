@@ -71,7 +71,14 @@ export class ApiClientError extends Error {
 
 async function request<T>(url: string, init: { method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"; payload?: unknown } = {}): Promise<T> {
   const response = await fetch(url, {
-    headers: { accept: "application/json" },
+    headers: {
+      accept: "application/json",
+      // Without an explicit content type the browser falls back to
+      // `text/plain`, which reaches the server as a *string* body — the config
+      // endpoint's "Body must be a JSON object." guard then rejects the patch
+      // even though the payload is valid JSON.
+      ...(init.payload === undefined ? {} : { ["content-type"]: "application/json" }),
+    },
     method: init.method ?? "GET",
     ...(init.payload === undefined ? {} : { body: JSON.stringify(init.payload) }),
   });
@@ -106,6 +113,8 @@ export interface TimelineEventDto {
   lane: string;
   view: string | null;
   viewId: string | null;
+  /** Index into `viewSpans` of the span the event is placed on (its filmstrip row); null → no-view row. */
+  spanId: number | null;
   element: string | null;
   elementType: string | null;
   on: boolean | null;
@@ -136,6 +145,10 @@ export interface TimelineViewSpanDto {
   closeMs: number | null;
   dwellSeconds: number | null;
   stillOpen: boolean;
+  kind: "view" | "popup" | "inferred";
+  layer: string | null;
+  /** NLE row (track) the span was packed into; spans of one view share a row. */
+  row: number;
 }
 
 export interface TimelineLaneDto {
@@ -156,6 +169,7 @@ export interface TimelineResponse {
   lanes: TimelineLaneDto[];
   events: TimelineEventDto[];
   viewSpans: TimelineViewSpanDto[];
+  rowCount: number;
   snapshots: TimelineSnapshotDto[];
 }
 

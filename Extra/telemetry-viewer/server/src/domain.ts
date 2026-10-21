@@ -29,6 +29,8 @@ export interface RawEventTags {
   view_id?: string;
   element?: string;
   element_type?: string;
+  /** CanvasLayer name of the view (`view_open`/`view_close` only); missing on legacy data. */
+  layer?: string;
 }
 
 export interface RawEventFields {
@@ -104,6 +106,8 @@ export interface SessionViewSpan {
   openNs: bigint;
   closeNs: bigint | null;
   dwellSeconds: number | null;
+  /** CanvasLayer name of the view (runtime tag); null when the data predates it. */
+  layer: string | null;
 }
 
 /** Snapshot lanes of the single-session timeline (P2, plan §9.1). */
@@ -167,6 +171,12 @@ export type TimelineLane =
   | "backdrop_click"
   | "unresolved";
 
+/** How a timeline span was derived — drives the client's row rendering. */
+export type TimelineSpanKind =
+  | "view" // main view (BACKGROUND/DEFAULT/MENU layer), runtime view_open/view_close pair
+  | "popup" // popup-layer view (Dialog, Snackbar, …), runtime pair with layer tag
+  | "inferred"; // legacy data: popup span synthesized from attributed interaction events
+
 export interface TimelineEvent {
   /** Stable ordinal into the ordered events array. */
   index: number;
@@ -180,6 +190,8 @@ export interface TimelineEvent {
   lane: TimelineLane;
   view: string | null;
   viewId: string | null;
+  /** Index into `viewSpans` of the span this event is placed on (its filmstrip row); null when no span holds it (client's orphan row). */
+  spanId: number | null;
   element: string | null;
   elementType: string | null;
   /** Toggle state field (`on`); null for non-toggles. */
@@ -205,6 +217,12 @@ export interface TimelineViewSpan {
   closeMs: number | null;
   dwellSeconds: number | null;
   stillOpen: boolean;
+  /** How the span was derived (kind tag from the runtime, or legacy inference). */
+  kind: TimelineSpanKind;
+  /** CanvasLayer name; null on legacy data. */
+  layer: string | null;
+  /** Row (track) of the NLE layout: spans of the same viewId share a row, rows are reused as spans end. */
+  row: number;
 }
 
 export interface TimelineSnapshotAnchor {
@@ -232,5 +250,7 @@ export interface TimelineFrame {
   events: TimelineEvent[];
   lanes: Array<{ lane: TimelineLane; label: string; count: number }>;
   viewSpans: TimelineViewSpan[];
+  /** Number of NLE rows (tracks) the spans were packed into (client viewport = max(3, rows)). */
+  rowCount: number;
   snapshots: TimelineSnapshotAnchor[];
 }

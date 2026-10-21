@@ -38,11 +38,12 @@ services:
       INFLUX_BUCKET: ui
       INFLUX_TOKEN: mdu-local-dev-token-0123456789abcdef
       LOG_LEVEL: info
-      # Optional .lp file source — mount a host directory and point LP_ROOT (or
-      # SNAPSHOT_ROOT for snapshot files) at it, e.g.:
-      #   - <your telemetry dir>:/data:ro
-      #   - LP_ROOT: /data/Telemetry/events
-      #   - SNAPSHOT_ROOT: /data/Telemetry/snapshots
+      # The host's Unity telemetry directory, read-only: .lp ledger files root
+      # (Sources ⚙ can override or null these back to env at runtime).
+      LP_ROOT: /data/Telemetry/events
+      SNAPSHOT_ROOT: /data/Telemetry/snapshots
+    volumes:
+      - "/Users/tobs/Library/Application Support/DefaultCompany/Unity-MaterialDesign-UI/Telemetry:/data/Telemetry:ro"
 
   influxdb:
     image: influxdb:2.7

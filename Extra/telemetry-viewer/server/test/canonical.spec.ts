@@ -124,3 +124,96 @@ nodes:
     expect(anonymousIndex.byNodeId.get("only")!.key).toBe("(unknown view) › mdu.ui.Button");
   });
 });
+
+describe("canonical keys — sibling name collisions (2026-10-20 regression)", () => {
+  // Instantiated views echo their mdu names across siblings: every cloned menu
+  // ListItem serializes with the SAME meaningful name, so the raw-name segment
+  // collided and 7 distinct ListItems folded into one key/one highlight.
+  const LIST_YAML = `
+schemaVersion: 2
+view:
+  id: v1
+  name: UIDemoMainMenu(Clone)
+  type: mdu.ui.UIDemoMainMenu(Clone)
+nodes:
+  - id: root1
+    kind: ui
+    isView: true
+    name: MainMenu
+    type: mdu.ui.MainMenu
+    siblingIndex: 0
+    rect: { x: 0, y: 0, width: 800, height: 600 }
+  - id: listPanel
+    kind: layout
+    name: MenuList
+    type: LayoutGroup
+    parentId: root1
+    siblingIndex: 1
+  - id: itemA
+    kind: ui
+    name: ListItem(Clone)
+    type: mdu.ui.ListItem
+    parentId: listPanel
+    siblingIndex: 1
+  - id: itemB
+    kind: ui
+    name: ListItem(Clone)
+    type: mdu.ui.ListItem
+    parentId: listPanel
+    siblingIndex: 4
+  - id: itemC
+    kind: ui
+    name: ListItem(Clone)
+    type: mdu.ui.ListItem
+    parentId: listPanel
+    siblingIndex: 5
+  - id: listPanelAgain
+    kind: layout
+    name: MenuList
+    type: LayoutGroup
+    parentId: root1
+    siblingIndex: 2
+  - id: itemD
+    kind: ui
+    name: ListItem(Clone)
+    type: mdu.ui.ListItem
+    parentId: listPanelAgain
+    siblingIndex: 1
+`;
+
+  const index = buildCanonicalIndex(parseSnapshotText(LIST_YAML));
+  const keyOf = (nodeId: string): string => index.byNodeId.get(nodeId)!.key;
+
+  function keyTail(nodeId: string): string {
+    return keyOf(nodeId).split(" › ").slice(-3).join(" › ");
+  }
+
+  it("gives same-named siblings distinct keys via the leaf ` [siblingIndex]` tie-breaker", () => {
+    expect(keyTail("itemA")).toBe("MenuList [1] › ListItem [1] › mdu.ui.ListItem");
+    expect(keyTail("itemB")).toBe("MenuList [1] › ListItem [4] › mdu.ui.ListItem");
+    expect(keyTail("itemC")).toBe("MenuList [1] › ListItem [5] › mdu.ui.ListItem");
+    expect(new Set([keyOf("itemA"), keyOf("itemB"), keyOf("itemC")]).size).toBe(3);
+  });
+
+  it("stays exact: the tie-breaker is not an anonymous fallback", () => {
+    const entry = index.byNodeId.get("itemB")!;
+    expect(entry.confidence).toBe("exact");
+    expect(entry.approximateSegments).toBe(0);
+    expect(isFallbackSegment("ListItem(Clone) [4]")).toBe(false);
+    expect(entry.leafLabel).toBe("ListItem [4]");
+  });
+
+  it("does not suffix uniquely-named segments", () => {
+    // MenuList appears TWICE under root → its segment gets the tie-breaker too,
+    // which also keeps the items under the two panels world-apart.
+    const a = keyOf("itemA").split(" › ");
+    expect(a[1]).toBe("MenuList [1]");
+    expect(a[2]).toBe("ListItem [1]");
+  });
+
+  it("maps each resolved key back to its own node (no first-occursion hijack)", () => {
+    expect(nodeIdForCanonicalKey(index, keyOf("itemA"))).toBe("itemA");
+    expect(nodeIdForCanonicalKey(index, keyOf("itemB"))).toBe("itemB");
+    expect(nodeIdForCanonicalKey(index, keyOf("itemC"))).toBe("itemC");
+  });
+});

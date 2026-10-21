@@ -217,7 +217,7 @@ export function parsedLineToRawEvent(parsed: ParsedLine): RawEvent | null {
   if (!KNOWN_MEASUREMENTS.has(parsed.measurement)) return null;
   const tags: Record<string, string | undefined> = {};
   for (const [key, value] of parsed.tags) {
-    if (key === "session" || key === "type" || key === "view" || key === "view_id" || key === "element" || key === "element_type") {
+    if (key === "session" || key === "type" || key === "view" || key === "view_id" || key === "element" || key === "element_type" || key === "layer") {
       tags[key] = value;
     }
   }
@@ -231,6 +231,7 @@ export function parsedLineToRawEvent(parsed: ParsedLine): RawEvent | null {
       ...(tags.view_id !== undefined ? { view_id: tags.view_id } : {}),
       ...(tags.element !== undefined ? { element: tags.element } : {}),
       ...(tags.element_type !== undefined ? { element_type: tags.element_type } : {}),
+      ...(tags.layer !== undefined ? { layer: tags.layer } : {}),
     },
     fields: toRawFields(parsed),
   };

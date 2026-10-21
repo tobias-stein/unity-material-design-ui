@@ -71,32 +71,54 @@ Every session row now opens into `#/session/<id>` — a NLE-style timeline
 beside a live UI replica:
 
 - **Canvas timeline** (`web/src/views/timeline.ts`): adaptive ruler
-  (nice 1/2/5 decades), wheel = zoom around the cursor, shift+wheel /
-  two-finger = pan, drag pan, pinch = zoom around the two-pointer midpoint,
+  (nice 1/2/5 decades), wheel = scroll tracks when the session has more rows
+  than fit (zoom at the cursor otherwise), ctrl+wheel/pinch = zoom (around the
+  cursor / two-pointer midpoint), shift+wheel / two-finger = pan, drag pan,
   double-click = fit. Window bounds: full session ≥ span ≥ 1 ms (ms
   resolution cap). Redraw is dirty-flag driven (idle rAF costs ~0 draw); the
   footer shows a live fps + draw-time readout.
-- **Lanes** (server constants `LANE_ORDER`): `view open/close` with dwell
-  span bars, `click`, `toggle` (on/off colored), `close`, `backdrop_click`,
-  and **unresolved** — every interaction a snapshot could not hold rides the
-  timeline on the unresolved lane (§6.1: never dropped). Dense stretches
-  collapse into per-pixel density bars, sparse stretches draw marbles; a
-  5k-event session stays interactive without per-event DOM.
-- **Filmstrip**: one simplified blocky mini-map per snapshot capture
-  (computed by `@mdu/snapshot-render`'s `computeMiniMap`), fetched lazily
-  with bounded concurrency; a click on the strip snaps the playhead; ⚠ marks
-  captures with the geometry warning.
-- **Playhead**: drag in the ruler, click anywhere to place, `←/→` step
-  events, `PgUp/PgDn` snap to snapshot anchors, `Home/End`, `+/−` zoom.
-  The replica panel renders the *nearest capture at or before the playhead*
-  through the shared renderer (`@mdu/snapshot-render`,
-  `bytes → js-yaml → pre-shaped JSON → DOM`). Wheel over the replica is
-  inert (the timeline is the only zoom surface); theme toggle (default-light
-  / raw, persisted per session in `sessionStorage`) re-derives render colors
-  from palette **roles** — captured theme colors are never copied implicitly
-  (§3.8). The exporter's geometry warning ("capture likely ran before layout
-  was applied") surfaces as warning chips above the replica, same as the
-  standalone viewer.
+- **Tracks = views** (audio/video-editor layout): every open/close cycle of a
+  view renders as a clip on its view's row — main views and popup-layer views
+  (Dialog, Snackbar) alike. The server packs spans minimally: spans of the
+  same view share one stable row (their covered gaps stay visible, never
+  merged), rows are reused as spans end. Popup rows get their own filmstrip
+  from popup snapshots (captured at popup show() in the Unity runtime);
+  legacy sessions infer popup clips from interaction events. Events with no
+  view attribution ride the "no view attribution" pseudo row.
+- **Filmstrip per clip**: one simplified blocky mini-map per snapshot capture
+  *of that view's span* (computed by `@mdu/snapshot-render`'s
+  `computeMiniMap`), fetched lazily with bounded concurrency; a click on a
+  clip focuses that view and snaps the playhead to its nearest capture; ⚠
+  marks captures with the geometry warning.
+- **Events inside the clips**: every interaction renders as a marble inside
+  the view's clip (click/toggle on-off colored/close/backdrop), dense
+  stretches collapse into per-pixel density bars, sparse stretches draw
+  marbles; a 5k-event session stays interactive without per-event DOM.
+  Interactions of dialog/snackbar elements are attributed to the popup
+  (runtime resolves the owning view), so their marbles land on the popup's
+  clip. Snapshot-less events stay honest with hollow rings; "unresolved"
+  (§6.1) events are **never dropped** — they ride their view's track with the
+  ring treatment (no-view ones on the pseudo row).
+- **Composite replica at the playhead** (2026-10-21): the replica panel renders
+  the *layered composite UI state* at the playhead — every view whose span
+  covers the moment shows its own capture, stacked bottom→top by canvas layer
+  (`BACKGROUND < DEFAULT < MENU < POPUP`, enum order = z-order), so dialogs and
+  snackbars overlay the main view like the live app. Overlay stages render
+  transparent (captured scrim alphas come through) and are placed from the
+  captured root anchor shape (y-flipped Unity→CSS; legacy captures without
+  anchor data fall back to centered); each overlay carries a `view · layer`
+  chip and the focused layer gets an outline. The §6.1 "latest ≤ t" pick applies
+  per span, plus an opening-capture grace rule (the capture's ledger point
+  lands a few ms after the `view_open` event — the span's first capture shows
+  for it). Spans on screen whose chain holds no capture surface as warn chips.
+  Follow-selection (filmstrip clicks / event moves) chooses the highlighted
+  layer. The replica renders through the shared renderer
+  (`@mdu/snapshot-render` — layer rules in `composite.ts`, pure + unit-tested);
+  theme toggle (default-light / raw, persisted per session in `sessionStorage`)
+  re-derives render colors from palette **roles** — captured theme colors are
+  never copied implicitly (§3.8). The exporter's geometry warning ("capture
+  likely ran before layout was applied") surfaces as warning chips above the
+  replica, same as the standalone viewer.
 - **Server routes**: `GET /api/sessions/:id/timeline` (the whole frame in
   one DTO; `eventCount` equals `<Session>`'s exactly — tested invariance)
   and `GET /api/snapshots/:sessionId/:ref` where `ref` is the numeric
@@ -322,7 +344,10 @@ nothing else; the tool performs **no writes**.
 InfluxDB 2.7 OSS returns query CSV with microsecond-precision timestamps and
 no annotation rows (tables separated by blank lines). The parser handles both
 OSS and Annotated-CSV output; for exact nanosecond truth the `.lp` fixtures
-are canonical (that is also why files win the merge).
+are canonical (that is also why the files source contributes to the merge
+first). Sessions present in several sources are **unioned** per session id —
+details (timeline, aggregate) read that merged stream, never a single
+provider run (regression 2026-10-21).
 
 ## Tests & fixtures
 
@@ -338,7 +363,7 @@ tests run against (`./scripts/export-fixtures.sh` regenerates):
 
 ```bash
 cd Extra/telemetry-viewer
-corepack pnpm --filter @mdu/telemetry-viewer-server test     # 126 tests
+corepack pnpm --filter @mdu/telemetry-viewer-server test     # 143 tests
 corepack pnpm test                                          # whole workspace (server + shared package)
 node scripts/perf-check.mjs                                 # P6 perf gates (boots its own server; pass = exit 0)
 ```
@@ -349,7 +374,11 @@ P5 adds the shared package's own suite (`corepack pnpm --filter
 page in jsdom vs. goldens captured from the pre-extraction viewer.js, replica
 + flex + status line) — and `normalize.spec.ts` (anon/duplicate ids, hierarchy
 + orphan re-attachment, schema-drift wording, geometry-warning threshold).
-The server's `snapshots.spec.ts` keeps asserting that its DOM-free parser
+The 2026-10-21 composite replica adds `composite.spec.ts` (canvas-layer rank
+ordering, per-span capture pick + opening-capture grace, legacy global-chain
+fallback) and `overlayPlacement.spec.ts` (popup-root anchor → CSS placement
+with the y-flip, center fallback, transparent-stage rendering). The server's
+`snapshots.spec.ts` keeps asserting that its DOM-free parser
 stays output-equal to the standalone semantics.
 
 P2 adds `timeline.spec.ts` (correlation "latest ≤ t", unresolved-never-dropped,
@@ -420,6 +449,18 @@ event pipeline as interaction events:
 ```
 ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH> <ns>
 ```
+
+- **One capture per visibility cycle** (fix 2026-10-21): every view comes from
+  the object pool, so a re-opened cycle reuses the *same runtime id*. The old
+  cross-cycle dedupe (`view id + node count` vs. the last capture ever, in
+  `UISnapshotTriggers`) suppressed the capture of **every open cycle after the
+  first** — per view, exactly one capture ever, consecutive snackbars never
+  captured. The triggers now capture on every `onViewShown` /
+  `onViewActivated` raise and only suppress near-simultaneous duplicate raises
+  of the same view (0.1 s window); the 5 s transition rate-limit still applies
+  to main-view transitions. Sessions recorded before the fix keep their
+  missing captures (nothing is invented — spans without captures surface as
+  warn chips in the timeline replica).
 
 - `key` — device-agnostic **storage key** (`snapshots/<yyyy>/<mm>/<dd>/<fileName>`,
   forward slashes; the leaf equals the on-disk file name). Files themselves

@@ -2,9 +2,14 @@
  * Session catalog — orchestrates the source providers and builds the session
  * read model (plan §5 server, §6.1).
  *
- * Providers arrive in priority order (files first, InfluxDB last). A session
- * that exists in an earlier provider is ignored in later ones, so data never
- * double-counts when the outbox has already flushed to both places.
+ * Providers arrive in priority order (files first, InfluxDB last); the origin
+ * of a merged session is the first provider that holds it. Sessions found in
+ * several providers are **unioned**: a leftover `pending-*.lp` contains only
+ * the tail of a session whose earlier batches InfluxDB already acknowledged,
+ * so first-wins-by-identity would present the partial tail and drop the
+ * complete ledger (snapshots included) that lives in InfluxDB. Duplicate
+ * points (at-least-once delivery) collapse on a wire identity key so data
+ * never double-counts.
  */
 import type {
   FetchOptions,
@@ -12,6 +17,7 @@ import type {
   RawEventResult,
   Session,
   SourceError,
+  SourceId,
   SourceProvider,
   SourceStatus,
 } from "../domain.js";
@@ -27,6 +33,14 @@ export interface ProviderRun {
 export interface SessionCatalog {
   sessions: Session[];
   runs: ProviderRun[];
+  /**
+   * The unioned event stream each projected session was built from, keyed by
+   * session id (server-only, not serialized). Sessions found across several
+   * providers hold the *merged* stream here — a detail endpoint that re-derives
+   * events from the session's `origin` provider run alone would drop the events
+   * of a split stream (e.g. a `pending-*.lp` tail over an influx-led body).
+   */
+  sessionEvents: ReadonlyMap<string, readonly RawEvent[]>;
   /** Aggregate health: `ok` when every configured provider is healthy. */
   status: "ok" | "degraded" | "unavailable";
 }
@@ -36,9 +50,17 @@ export async function buildSessionCatalog(
   options: FetchOptions = {},
 ): Promise<SessionCatalog> {
   const runs: ProviderRun[] = [];
-  const sessionLists: Array<{ providerId: SourceProvider["id"]; sessions: Session[] }> = [];
 
-  // Files must resolve before Influx runs: files-first wins by identity.
+  // Per-session event union across providers, in provider priority order.
+  // `origin` is the first provider that holds the session; the identity set
+  // collapses points that arrived via both the outbox and the archive.
+  interface Union {
+    origin: SourceId;
+    events: RawEvent[];
+    identity: Set<string>;
+  }
+  const bySession = new Map<string, Union>();
+
   for (const provider of providers) {
     const status = await provider.describe();
     let result: RawEventResult | null = null;
@@ -48,27 +70,65 @@ export async function buildSessionCatalog(
       error = result.error ?? null;
     }
     runs.push({ id: provider.id, status, result, error });
-    if (result !== null) {
-      const sessions = projectSessions(result.events);
-      for (const session of sessions) session.origin = provider.id;
-      sessionLists.push({ providerId: provider.id, sessions });
+    if (result === null) continue;
+
+    for (const event of result.events) {
+      const sessionId = event.tags.session;
+      if (sessionId === "") continue; // unattributable at projection anyway
+
+      let union = bySession.get(sessionId);
+      if (union === undefined) {
+        union = { origin: provider.id, events: [], identity: new Set() };
+        bySession.set(sessionId, union);
+      }
+
+      // At-least-once delivery guard. The runtime emits one point per wire
+      // series (measurement + timestamp + full tag set) — a wire-exact
+      // duplicate is a replay, never a distinct event. The key carries the
+      // full tag set (not just type/view_id) so two *distinct* points that
+      // share a nanosecond (e.g. two different elements clicking in the same
+      // instant) never collapse; exact replays share every tag regardless.
+      const identityKey = [
+        event.measurement,
+        event.timestampNs.toString(),
+        event.tags.type ?? "",
+        event.tags.view ?? "",
+        event.tags.view_id ?? "",
+        event.tags.element ?? "",
+        event.tags.element_type ?? "",
+        event.tags.layer ?? "",
+        // ui_snapshot_taken carries its artifact identity in fields.
+        event.fields.key ?? "",
+      ].join("\u0000");
+      if (union.identity.has(identityKey)) continue;
+      union.identity.add(identityKey);
+      union.events.push(event);
     }
   }
 
-  // Identity-based union with files-first precedence.
-  const merged = new Map<string, Session>();
-  for (const { sessions } of sessionLists) {
-    for (const session of sessions) {
-      if (!merged.has(session.id)) merged.set(session.id, session);
-    }
+  // Projection is order-sensitive for view open/close pairing; the merged
+  // event set interleaves providers, so sort each session's union by time
+  // (stable) before projecting.
+  const sessions: Session[] = [];
+  for (const union of bySession.values()) {
+    union.events.sort((a, b) => (a.timestampNs < b.timestampNs ? -1 : a.timestampNs > b.timestampNs ? 1 : 0));
+    const session = projectSessions(union.events)[0];
+    if (session === undefined) continue;
+    session.origin = union.origin;
+    sessions.push(session);
   }
 
-  const sessions = [...merged.values()].sort(compareSessions);
+  sessions.sort(compareSessions);
+  // Retain each session's unioned stream: the API's detail read models
+  // (timeline, aggregate) must see exactly what the projection saw.
+  const sessionEvents = new Map<string, readonly RawEvent[]>();
+  for (const [id, union] of bySession) sessionEvents.set(id, union.events);
   const anyAvailable = runs.some((run) => run.status.available);
   const anyErrors = runs.some((run) => run.error !== null);
   return {
     sessions,
     runs,
+    sessionEvents,
     status: !anyAvailable ? "unavailable" : anyErrors ? "degraded" : "ok",
   };
 }

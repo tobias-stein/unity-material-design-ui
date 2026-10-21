@@ -257,10 +257,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     if (session === undefined) {
       throw new ApiError("SESSION_NOT_FOUND", `No session "${request.params.id}" in any source.`, 404);
     }
-    // Events come from the session's own provider run (files win by identity,
-    // §6.1) and are filtered to this session — never double-counted.
-    const producingRun = catalogResult.runs.find((run) => run.id === session.origin);
-    const sessionEvents = (producingRun?.result?.events ?? []).filter((event) => event.tags.session === session.id);
+    // Events are the unioned stream the projection built this session from —
+    // never re-derived from the `origin` provider run alone, which drops the
+    // Influx side of a split stream (pending-*.lp tail over an influx body).
+    const sessionEvents = catalogResult.sessionEvents.get(session.id) ?? [];
     const frame = buildTimelineFrame(session, sessionEvents);
     // The timeline is the session detail's event list — nothing may be added
     // or silently dropped between the two read models (tested invariant).
@@ -344,15 +344,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       });
     }
 
-    // Events ride each session's own producing provider run (files win by
-    // identity, §6.1) — never double-counted across sources.
+    // Events ride the unioned stream each session was projected from — never
+    // re-derived from the `origin` run, which drops the Influx side of a split
+    // stream (pending-*.lp tail over an influx body). Keyed by session id.
     const eventsBySession = new Map<string, RawEvent[]>();
     for (const session of selected) {
-      const producingRun = catalogResult.runs.find((run) => run.id === session.origin);
-      eventsBySession.set(
-        session.id,
-        (producingRun?.result?.events ?? []).filter((event) => event.tags.session === session.id),
-      );
+      eventsBySession.set(session.id, [...(catalogResult.sessionEvents.get(session.id) ?? [])]);
     }
     return { sessions: selected, eventsBySession };
   };
@@ -556,6 +553,7 @@ export interface TimelineEventDto {
   lane: string;
   view: string | null;
   viewId: string | null;
+  spanId: number | null;
   element: string | null;
   elementType: string | null;
   on: boolean | null;
@@ -586,7 +584,11 @@ export interface TimelineDto {
     closeMs: number | null;
     dwellSeconds: number | null;
     stillOpen: boolean;
+    kind: "view" | "popup" | "inferred";
+    layer: string | null;
+    row: number;
   }>;
+  rowCount: number;
   snapshots: Array<{
     index: number;
     ns: string;
@@ -615,6 +617,7 @@ export function toTimelineDto(_catalogResult: SessionCatalog, frame: TimelineFra
     lanes: frame.lanes,
     events: frame.events,
     viewSpans: frame.viewSpans,
+    rowCount: frame.rowCount,
     snapshots: frame.snapshots,
   };
 }

@@ -26,6 +26,17 @@
  * acceptance shape ("… › path › Button") via the `elementType` terminator and
  * any fallback segment's `[siblingIndex]`, while separating same-named-or-
  * same-typed siblings as far as the captured tree allows.
+ *
+ * Sibling-name collisions: names are meaningful but not necessarily unique —
+ * instantiated views ECHO their mdu names across siblings (e.g. every cloned
+ * menu entry serializes as `ListItem(Clone)`). A name-collision group under
+ * one parent therefore gets the sibling index appended to its leaf segment
+ * (`ListItem(Clone) [4]`) so the members stay distinct, mirroring the
+ * anonymous fallback's `[siblingIndex]`. Uniquely-named segments never gain a
+ * suffix — every other view's canonical keys remain byte-identical. Confidence
+ * stays `exact`: the names are real; the index is a tie-breaker. Rendered
+ * order changes across sessions surface as separate rows on purpose (siblings
+ * ordered differently are different UI states, not the same element).
  */
 import type { ParsedSnapshot, SnapshotNodeShape } from "../snapshots/parse.js";
 
@@ -127,6 +138,8 @@ export function buildCanonicalIndex(snapshot: ParsedSnapshot): CanonicalIndex {
   for (const node of snapshot.nodes) nodesById.set(String(node.id), node);
   const rootNode = nodesById.get(snapshot.rootId) ?? snapshot.nodes[0];
 
+  // Pass 1 — every node's root chain with raw segments.
+  const chains = new Map<string, Array<{ id: string; node: SnapshotNodeShape; segment: string }>>();
   for (const node of snapshot.nodes) {
     const id = String(node.id);
     const chain: Array<{ id: string; node: SnapshotNodeShape; segment: string }> = [];
@@ -140,27 +153,58 @@ export function buildCanonicalIndex(snapshot: ParsedSnapshot): CanonicalIndex {
           ? nodesById.get(parentId) ?? null
           : null;
     }
+    chains.set(id, chain);
+  }
 
+  // Pass 2 — size of each sibling group (children of one parent sharing a raw
+  // segment). Each node contributes exactly one such edge: its own.
+  const siblingGroupSizes = new Map<string, number>();
+  for (const chain of chains.values()) {
+    if (rootNode !== undefined && !inChainToRoot(chain, rootNode)) continue;
+    if (chain.length < 2) continue;
+    const parent = chain[chain.length - 2]!;
+    const self = chain[chain.length - 1]!;
+    const groupKey = `${parent.id}\u0000${self.segment}`;
+    siblingGroupSizes.set(groupKey, (siblingGroupSizes.get(groupKey) ?? 0) + 1);
+  }
+
+  // Pass 3 — final per-node segment: members of a collision group gain the
+  // leaf suffix ` [siblingIndex]` (fallback segments carry the index already).
+  const finalSegment = new Map<string, string>();
+  for (const chain of chains.values()) {
+    const self = chain[chain.length - 1]!;
+    let segment = self.segment;
+    if (chain.length >= 2) {
+      const parent = chain[chain.length - 2]!;
+      if ((siblingGroupSizes.get(`${parent.id}\u0000${self.segment}`) ?? 0) > 1) {
+        const siblingIndex = typeof self.node.siblingIndex === "number" ? self.node.siblingIndex : 0;
+        segment = `${self.segment} [${siblingIndex}]`;
+      }
+    }
+    finalSegment.set(self.id, segment);
+  }
+
+  // Pass 4 — canonical keys: path of final segments from the view root down.
+  for (const [id, chain] of chains) {
     // Drop nodes outside the view chain (defensive: the parser folds orphans
     // under the first root already).
     if (rootNode !== undefined && !inChainToRoot(chain, rootNode)) continue;
 
-    // Path segments: strict descendants of the view root, down to the node.
     const segments: string[] = [];
     let approximateSegments = 0;
     for (let i = 1; i < chain.length; i++) {
       const step = chain[i]!;
-      segments.push(step.segment);
+      segments.push(finalSegment.get(step.id) ?? step.segment);
       if (isFallbackSegment(step.segment)) approximateSegments++;
     }
 
-    const leaf = chain[chain.length - 1]!;
-    const elementType = elementTypeOf(node);
+    const leafId = chain[chain.length - 1]!.id;
+    const elementType = elementTypeOf(chain[chain.length - 1]!.node);
     const entry: CanonicalEntry = {
       key: canonicalKeyFromSegments(viewKey, segments, elementType),
       viewKey,
       elementType,
-      leafLabel: leaf.segment,
+      leafLabel: finalSegment.get(leafId) ?? chain[chain.length - 1]!.segment,
       confidence: approximateSegments === 0 ? "exact" : "approximate",
       approximateSegments,
     };

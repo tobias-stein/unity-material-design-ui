@@ -1,34 +1,45 @@
 /**
- * Single-session timeline view (P2, plan §9.1) — NLE-style canvas timeline:
+ * Single-session timeline view (P2, plan §9.1, NLE rebuild 2026-10-21) —
+ * canvas timeline in audio/video-editor layout:
  *
- * - **Ruler**: time axis with adaptive tick density; wheel = zoom around
- *   cursor, shift+wheel = horizontal pan, drag = pan, pinch = zoom around the
- *   two-pointer midpoint. Min range = full session; max zoom = ms resolution
- *   (visible span ≥ 1 ms).
- * - **Lanes** (rows): view_open/view_close (+ dwell span bars), click, toggle
- *   (split by the `on` state), close, backdrop_click, and an unresolved lane
- *   for events no snapshot anchor could hold (§6.1 — never dropped). Dense
- *   clusters collapse into a per-pixel density bar (5k-event sessions stay
- *   smooth); sparse regions draw marbles.
- * - **Filmstrip**: one simplified blocky mini-map block per snapshot capture
- *   (scene change), fetched lazily + precomputed via the shared minimap;
- *   click snaps the playhead.
- * - **Playhead**: draggable in the ruler, click-to-place anywhere; PgUp/PgDn
- *   snap to snapshot anchors; ←/→ step events; Home/End clamp; double-click
- *   fits. The replica panel renders the nearest prior snapshot (~or before
- *   ← first snapshot → honest empty state) via `@mdu/snapshot-render`; wheel
- *   over the replica never zooms it (timeline-only zoom) and captured
- *   geometry warnings surface right below the header, as in the standalone
- *   viewer.
+ * - **Rows (tracks)**: one row per *view*, not per event type. Every open/close
+ *   cycle of a view renders as a clip on its view's row — main views and
+ *   popup-layer views (Dialog, Snackbar) alike. Spans of the same view share
+ *   one stable row (their covered-gaps stay visible, never merged); rows are
+ *   reused as spans end so the track count stays minimal (server-packed `row`).
+ * - **Filmstrip per row**: the mini-map blocks of the snapshots taken *inside
+ *   that view's span*. Popup views capture their own snapshots at show(), so a
+ *   dialog gets a real filmstrip; legacy popup rows render as tinted bars.
+ * - **Events inside the filmstrip**: every interaction of a view is drawn as a
+ *   marble inside that view's clip (click/toggle/close/backdrop colors;
+ *   toggle=state dot; unresolved=hollow ring). Dense clusters collapse into a
+ *   per-pixel density bar. Events without any view attribution ride a second
+ *   ("no view") pseudo row — never dropped.
+ * - **Ruler**: time axis with adaptive ticks; always pinned on top. Wheel =
+ *   scroll rows when the session has more tracks than fit (max 3 visible),
+ *   zoom at cursor otherwise (pinch/ctrl+wheel always zoom); shift+wheel =
+ *   horizontal pan; drag = pan; dbl-click = fit.
+ * - **Playhead**: draggable in the ruler, click-to-place; PgUp/PgDn snap to
+ *   snapshot anchors; ←/→ step events; Home/End clamp. Every placement
+ *   resolves to the temporally nearest event (`setPlayheadMs`), the event gets
+ *   a ring marker, and the replica panel renders the *composite UI state* at
+ *   the playhead (composite rework 2026-10-21): every view whose span covers
+ *   the playhead renders its own capture, stacked bottom→top by canvas layer
+ *   (dialogs/snackbars overlay the main view, placed from their captured root
+ *   anchors). `applyReplicaHighlight` outlines the selected event's node in
+ *   the matching layer; follow-selection (filmstrip/section clicks) chooses
+ *   which layer carries the highlight outline.
  */
-import { api, ApiClientError, type ParsedSnapshotDto, type SnapshotResponse, type TimelineResponse } from "../api.js";
+import { api, ApiClientError, type ParsedSnapshotDto, type SnapshotResponse, type TimelineEventDto, type TimelineResponse, type TimelineSnapshotDto, type TimelineViewSpanDto } from "../api.js";
 import {
   buildReplicaStage,
+  canvasViewportOf,
   computeMiniMap,
   defaultLightTheme,
   drawMiniMap,
-  fitReplica,
   injectTheme,
+  overlayPlacementFor,
+  resolveComposite,
   type MiniMapData,
   type UISnapshot,
 } from "@mdu/snapshot-render";
@@ -36,25 +47,15 @@ import {
 /* ----------------------------------------------------------------- layout */
 
 const RULER_H = 34;
-const LANE_H = 34;
-const FILM_H = 60;
+/** One track row: filmstrip band + event marbles. */
+const ROW_H = 56;
+/** Vertical viewport limit: more rows than this scroll instead of growing. */
+const MAX_VISIBLE_ROWS = 3;
 const HANDLE_HALF = 6;
 const MIN_VISIBLE_MS = 1; // max zoom: ms resolution
 const MINIMAP_CONCURRENCY = 4;
 
-const LANES = [
-  { id: "views", label: "views open/close" },
-  { id: "click", label: "click" },
-  { id: "toggle", label: "toggle" },
-  { id: "close", label: "close" },
-  { id: "backdrop_click", label: "backdrop" },
-  { id: "unresolved", label: "unresolved" },
-] as const;
-
-type LaneId = (typeof LANES)[number]["id"];
-
 const MARBLE_COLORS = {
-  views: "#8ab4f8",
   click: "#81c784",
   toggle_on: "#d0bcff",
   toggle_off: "#4a4b57",
@@ -63,9 +64,17 @@ const MARBLE_COLORS = {
   unresolved: "#f2b8b5",
 };
 
-/** Static lane color; the toggle lane resolves per-event to toggle_on/off. */
-function marbleColor(laneId: LaneId): string {
-  return laneId === "toggle" ? MARBLE_COLORS.toggle_off : MARBLE_COLORS[laneId];
+/** Static marble color; toggles resolve per-event to toggle_on/off. */
+function marbleColor(type: string): string {
+  if (type === "toggle") return MARBLE_COLORS.toggle_off;
+  return (MARBLE_COLORS as Record<string, string | undefined>)[type] ?? MARBLE_COLORS.unresolved;
+}
+
+/** Span kind → clip palette [fill, edge]. */
+function spanPalette(kind: TimelineViewSpanDto["kind"], stillOpen: boolean): [string, string] {
+  if (kind === "popup") return stillOpen ? ["rgba(208,188,255,0.22)", "#d0bcff"] : ["rgba(208,188,255,0.18)", "#d0bcff"];
+  if (kind === "inferred") return ["rgba(255,183,77,0.14)", "#ffb74d"];
+  return stillOpen ? ["rgba(208,188,255,0.22)", "#d0bcff"] : ["rgba(138,180,248,0.16)", "#8ab4f8"];
 }
 
 const FILM_BG = "#221d2c";
@@ -118,12 +127,156 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   const replicaFooter = app.querySelector<HTMLDivElement>("#tl-replica-footer")!;
   const replicaWarnings = app.querySelector<HTMLDivElement>("#tl-replica-warnings")!;
   const replicaEmpty = app.querySelector<HTMLDivElement>("#tl-replica-empty")!;
+  const zoomOutBtn = app.querySelector<HTMLButtonElement>("#tl-zoom-out")!;
+  const zoomInBtn = app.querySelector<HTMLButtonElement>("#tl-zoom-in")!;
+  const zoomFitBtn = app.querySelector<HTMLButtonElement>("#tl-zoom-fit")!;
+  const zoom11Btn = app.querySelector<HTMLButtonElement>("#tl-zoom-11")!;
+  const zoomLevel = app.querySelector<HTMLSpanElement>("#tl-zoom-level")!;
 
-  // The replica never zooms or page-scrolls (plan §9.1): the timeline canvas is
-  // the only zoom/pan surface, so wheel over the replica is swallowed.
-  for (const surface of [replicaViewport, replicaHolder]) {
-    surface.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
+  // The replica owns its zoom/pan now (user request 2026-10-20): wheel over
+  // it zooms (multiplying the fit scale), drag pans the zoomed stage, a
+  // horizontal wheel pans. preventDefault keeps the page/gesture zoom out.
+  replicaViewport.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        replicaHolder.scrollLeft += (event.deltaX !== 0 ? event.deltaX : event.deltaY) * 0.5;
+        return;
+      }
+      setReplicaZoom(replicaZoom * Math.exp(-event.deltaY * 0.0022));
+    },
+    { passive: false },
+  );
+
+  let replicaPan: { x: number; y: number; left: number; top: number } | null = null;
+  replicaViewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || replicaZoom <= 1) return; // fit fills the panel — nothing to pan
+    replicaPan = { x: event.clientX, y: event.clientY, left: replicaHolder.scrollLeft, top: replicaHolder.scrollTop };
+    replicaViewport.setPointerCapture(event.pointerId);
+  });
+  replicaViewport.addEventListener("pointermove", (event) => {
+    if (replicaPan === null) return;
+    replicaHolder.scrollLeft = replicaPan.left - (event.clientX - replicaPan.x);
+    replicaHolder.scrollTop = replicaPan.top - (event.clientY - replicaPan.y);
+  });
+  const endReplicaPan = (): void => {
+    replicaPan = null;
+  };
+  replicaViewport.addEventListener("pointerup", endReplicaPan);
+  replicaViewport.addEventListener("pointercancel", endReplicaPan);
+
+  /* ------------------------------------------------------------- row model */
+
+  /**
+   * The NLE model: spans packed on rows by the server, events attached to
+   * spans, snapshot anchors scoped per span for the filmstrip blocks, and a
+   * final pseudo row for events no view attribution could hold (never dropped).
+   */
+  interface RowSpan {
+    span: TimelineViewSpanDto;
+    events: TimelineEventDto[];
+    /** Anchors of this span's view inside [openMs, closeMs|frame end]. */
+    anchors: TimelineSnapshotDto[];
   }
+
+  const { startMs: frameStart, endMs: frameEnd } = timeline;
+  const spanById = new Map<number, TimelineViewSpanDto>();
+  for (const span of timeline.viewSpans) spanById.set(span.index, span);
+
+  const rowSpans = new Map<number, RowSpan[]>();
+  for (const span of timeline.viewSpans) {
+    const row = Math.max(span.row, 0);
+    let list = rowSpans.get(row);
+    if (list === undefined) {
+      list = [];
+      rowSpans.set(row, list);
+    }
+    list.push({ span, events: [], anchors: [] });
+  }
+  for (const list of rowSpans.values()) {
+    list.sort((a, b) => a.span.openMs - b.span.openMs);
+  }
+  const rowCount = Math.max(
+    timeline.rowCount,
+    ...[...rowSpans.keys()].map((row) => row + 1),
+  );
+  const NO_VIEW_ROW = rowCount; // pseudo row after the real tracks
+
+  const rowOfSpanId = new Map<number, number>();
+  for (const span of timeline.viewSpans) rowOfSpanId.set(span.index, Math.max(span.row, 0));
+
+  // Events → spans (spanId from the server; legacy frames without rows keep
+  // everything on the no-view row).
+  const orphanEvents: TimelineEventDto[] = [];
+  for (const event of timeline.events) {
+    if (event.spanId === null && event.viewId === null) {
+      orphanEvents.push(event);
+      continue;
+    }
+    const spanId =
+      event.spanId ?? nearestSpanIdFor(event.viewId, event.ms);
+    if (spanId === null) {
+      orphanEvents.push(event);
+      continue;
+    }
+    const span = spanById.get(spanId);
+    if (span === undefined) {
+      orphanEvents.push(event);
+      continue;
+    }
+    rowSpans.get(Math.max(span.row, 0))!.find((entry) => entry.span === span)!.events.push(event);
+  }
+
+  /** Latest span of a view at-or-before t (client fallback for legacy events without spanId). */
+  function nearestSpanIdFor(viewId: string | null, tMs: number): number | null {
+    if (viewId === null) return null;
+    let best: TimelineViewSpanDto | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const span of timeline.viewSpans) {
+      if (span.viewId !== viewId) continue;
+      const closeMs = span.closeMs ?? Number.POSITIVE_INFINITY;
+      if (tMs >= span.openMs && tMs <= closeMs) return span.index;
+      const dist = Math.min(
+        Math.abs(tMs - span.openMs),
+        Number.isFinite(closeMs) ? Math.abs(tMs - closeMs) : Number.POSITIVE_INFINITY,
+      );
+      if (dist < bestDist) {
+        best = span;
+        bestDist = dist;
+      }
+    }
+    return best?.index ?? null;
+  }
+
+  // Snapshot anchors grouped per view_id (span filmstrip blocks).
+  const anchorsByViewId = new Map<string, TimelineSnapshotDto[]>();
+  for (const anchor of timeline.snapshots) {
+    if (anchor.viewId === null) continue;
+    let list = anchorsByViewId.get(anchor.viewId);
+    if (list === undefined) {
+      list = [];
+      anchorsByViewId.set(anchor.viewId, list);
+    }
+    list.push(anchor);
+  }
+  for (const list of anchorsByViewId.values()) {
+    list.sort((a, b) => a.ms - b.ms);
+  }
+  for (const list of rowSpans.values()) {
+    for (const entry of list) {
+      const viewId = entry.span.viewId;
+      const anchors = viewId !== null ? anchorsByViewId.get(viewId) ?? [] : [];
+      entry.anchors = anchors.filter(
+        (anchor) =>
+          anchor.ms >= entry.span.openMs - 1e-9 &&
+          anchor.ms <= (entry.span.closeMs ?? frameEnd) + 1e-9,
+      );
+    }
+  }
+
+  /** Which span should the replica focus ("follow selection"); null = global fallback. */
+  let focusedSpanId: number | null = null;
 
   /* ------------------------------------------------------- canvas geometry */
 
@@ -136,9 +289,48 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   let viewStart = lo0;
   let viewEnd = hi0;
   let playheadMs = timeline.snapshots.length > 0 ? (timeline.snapshots[0]?.ms ?? T0) : T0;
+  // Selection invariant: the playhead always coincides with the temporally
+  // nearest event (see setPlayheadMs); -1 only while the session has no
+  // events at all (free placement stays possible there).
+  let selectedEventIndex = closestEventIndex(playheadMs);
+  if (selectedEventIndex !== -1) playheadMs = timeline.events[selectedEventIndex]!.ms;
 
-  const laneBottom = RULER_H + LANES.length * LANE_H;
-  const canvasH = laneBottom + FILM_H;
+  const orphanCount = orphanEvents.length;
+  const totalRows = rowCount + (orphanCount > 0 ? 1 : 0);
+  const visibleRows = Math.min(totalRows, MAX_VISIBLE_ROWS);
+  const visibleRowsH = visibleRows * ROW_H;
+  const laneBottom = RULER_H; // rows live below the pinned ruler
+  const canvasH = laneBottom + visibleRowsH;
+
+  // Vertical workspace: the timeline strip is exactly the canvas content
+  // height; the replica panel below takes the rest of the page. The canvas
+  // is absolutely positioned, so the wrap gets an explicit height here.
+  wrap.style.height = `${canvasH}px`;
+
+  /** Vertical scroll (rows beyond the viewport); drawn-state, clamped. */
+  let scrollY = 0;
+  const maxScrollY = Math.max(0, totalRows * ROW_H - visibleRowsH);
+  function clampScrollY(value: number): number {
+    return Math.min(Math.max(value, 0), maxScrollY);
+  }
+  function rowY(row: number): number {
+    return RULER_H + row * ROW_H - scrollY;
+  }
+  function rowAt(y: number): number {
+    return Math.floor((y - RULER_H + scrollY) / ROW_H);
+  }
+  /** Marbles/labels sit on the vertical center of their row. */
+  function rowCenter(row: number): number {
+    return rowY(row) + ROW_H / 2;
+  }
+  /** Scroll a row into the viewport (reveal of keyboard/programmatic jumps). */
+  function revealRow(row: number): void {
+    const top = row * ROW_H;
+    const bottom = top + ROW_H;
+    if (top < scrollY) scrollY = clampScrollY(top);
+    else if (bottom > scrollY + visibleRowsH) scrollY = clampScrollY(bottom - visibleRowsH);
+    dirty = true;
+  }
 
   function canvasWidth(): number {
     return Math.max(canvas.clientWidth, 1);
@@ -231,26 +423,40 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
 
   const replicaCache = new Map<number, Promise<ReplicaEntry>>();
-  let renderedAnchor = -1;
-  let renderedTheme: "default-light" | "raw" | null = null;
+  /**
+   * Monotonic render token: every syncReplica bumped; in-flight fetches that
+   * resolve after a newer sync ignore themselves (the playhead moved on).
+   */
+  let renderToken = 0;
+  /** What is on screen right now: `${anchor indexes}|${themeMode}` — re-syncs
+   *  with the same key skip the rebuild and only refresh the highlight. */
+  let renderedKey: string | null = null;
+  /** The rendered composite wrapper (zoom/pan target) + its design size. */
+  let liveComposite: HTMLDivElement | null = null;
+  let liveBaseSize: { width: number; height: number } | null = null;
+  /** Currently rendered layers, bottom → top (highlight/outline scope). */
+  let renderedLayers: RenderedLayer[] = [];
+  /** Replica zoom: user multiplier over the fit-in-panel scale, applied via
+   *  CSS zoom (layout-scaled, so the holder's scrollbars act as pan). */
+  let replicaFitScale = 1;
+  let replicaZoom = 1;
+  const REPLICA_MAX_ZOOM = 8;
 
-  function anchorIndexAt(tMs: number): number {
-    // Latest capture at or before the playhead (§6.1 "latest ≤ t").
-    const anchors = timeline.snapshots;
-    let lo = 0;
-    let hi = anchors.length - 1;
-    let best = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (anchors[mid]!.ms <= tMs) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return best;
+  /**
+   * Fit-in-panel scale for the composite, computed from the base snapshot's
+   * design size (not the zoomed DOM box — CSS zoom cascades to children, so
+   * offsetWidth measurements would feed back).
+   */
+  function computeFitScale(): number {
+    const size = liveBaseSize;
+    if (size === null) return 1;
+    const availWidth = Math.max(replicaViewport.clientWidth - 24, 60);
+    const availHeight = Math.max(replicaViewport.clientHeight - 24, 60);
+    return Math.min(availWidth / size.width, availHeight / size.height, 1.5);
   }
+
+  /** Set by filmstrip-block clicks: a click explicitly focuses a span even when it holds no captures. */
+  let focusedSpanWasJustClicked = false;
 
   function replicaFor(index: number): Promise<ReplicaEntry> {
     let entry = replicaCache.get(index);
@@ -279,66 +485,295 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
 
   function syncReplica(): void {
-    const index = anchorIndexAt(playheadMs);
-    if (index === -1) {
-      renderedAnchor = -1;
-      renderedTheme = null;
+    const token = ++renderToken;
+    const composite = resolveComposite(timeline.viewSpans, timeline.snapshots, playheadMs);
+    if (composite.layers.length === 0) {
+      renderedKey = null;
+      liveComposite = null;
+      liveBaseSize = null;
+      renderedLayers = [];
       replicaHolder.replaceChildren();
       replicaWarnings.replaceChildren();
       replicaMeta.textContent = "—";
       replicaFooter.textContent = "";
-      replicaEmpty.textContent = "No snapshot at this moment (before the first capture).";
+      replicaEmpty.textContent = composite.reason ?? "No snapshot at this moment.";
       replicaEmpty.classList.remove("hidden");
+      applyReplicaHighlight();
       return;
     }
-    const anchor = timeline.snapshots[index]!;
-    void replicaFor(index).then((entry) => {
-      if (anchorIndexAt(playheadMs) !== index) return; // playhead moved on
-      if (renderedAnchor === index && renderedTheme === themeMode) return; // already on stage
-      if (entry.parsed === null) {
-        const message =
-          entry.error?.code === "SNAPSHOT_STORE_UNCONFIGURED"
-            ? "Snapshot root not configured (SNAPSHOT_ROOT) — event lanes only."
-            : entry.error?.code === "SNAPSHOT_ARTIFACT_MISSING"
-            ? "Snapshot bytes missing in the store (ledger recorded the artifact)."
-            : entry.error?.code === "SNAPSHOT_STORE_UNREACHABLE"
-            ? "Snapshot store unreachable — check the root path."
-            : `Snapshot unavailable (${entry.error?.code ?? "SNAPSHOT_FAILED"}).`;
-        renderedAnchor = index;
-        renderedTheme = themeMode;
-        replicaHolder.replaceChildren();
-        replicaWarnings.replaceChildren();
-        replicaMeta.textContent = anchorName(anchor);
-        replicaFooter.textContent = entry.error?.message ?? "";
-        replicaEmpty.textContent = message;
-        replicaEmpty.classList.remove("hidden");
+    const targets = composite.layers.map((layer) => ({
+      span: layer.span,
+      anchor: timeline.snapshots[layer.anchor.index]!,
+      promise: replicaFor(layer.anchor.index),
+    }));
+    void Promise.all(targets.map((target) => target.promise)).then((entries) => {
+      if (token !== renderToken) return; // playhead moved on
+      const key = `${targets.map((target) => target.anchor.index).join(",")}|${themeMode}`;
+      if (renderedKey === key) {
+        // Composite already current: re-apply just the selection overlay (the
+        // playhead may have moved to another event on the same captures).
+        applyReplicaHighlight();
         return;
       }
+      // Spans on screen that contribute no layer (their chain holds no capture
+      // in this span — e.g. dedupe-era sessions) surface as warn chips.
+      const renderedSpanIndexes = new Set(composite.layers.map((layer) => layer.span?.index));
+      const skipped = timeline.viewSpans.filter(
+        (span) =>
+          !renderedSpanIndexes.has(span.index) &&
+          span.openMs - 1e-9 <= playheadMs &&
+          playheadMs <= (span.closeMs ?? Number.POSITIVE_INFINITY) + 1e-9,
+      );
+      renderComposite(targets.map((target, i) => ({ span: target.span, anchor: target.anchor, entry: entries[i]! })), skipped);
+      renderedKey = key;
+    });
+  }
 
-      const uiSnapshot = asUISnapshot(entry.parsed);
-      replicaHolder.replaceChildren();
-      const replica = buildReplicaStage(uiSnapshot, replicaHolder, themeMode);
+  /** One rendered composite layer (bottom → top). */
+  interface RenderedLayer {
+    span: TimelineViewSpanDto | null;
+    anchor: TimelineSnapshotDto;
+    /** The stage element — null for skipped layers. */
+    stage: HTMLDivElement | null;
+    /** Snapshot/span view id the stage was rendered from. */
+    viewId: string | null;
+  }
+
+  function describeFetchError(entry: ReplicaEntry): string {
+    return entry.error?.code === "SNAPSHOT_STORE_UNCONFIGURED"
+      ? "Snapshot root not configured (SNAPSHOT_ROOT) — event lanes only."
+      : entry.error?.code === "SNAPSHOT_ARTIFACT_MISSING"
+        ? "Snapshot bytes missing in the store (ledger recorded the artifact)."
+        : entry.error?.code === "SNAPSHOT_STORE_UNREACHABLE"
+          ? "Snapshot store unreachable — check the root path."
+          : `Snapshot unavailable (${entry.error?.code ?? "SNAPSHOT_FAILED"}).`;
+  }
+
+  /**
+   * Build the layered composite (2026-10-21): all spans covering the playhead
+   * render their own capture, stacked by canvas layer over the base stage —
+   * dialogs/snackbars overlay the main view like the live app.
+   */
+  function renderComposite(
+    resolved: Array<{ span: TimelineViewSpanDto | null; anchor: TimelineSnapshotDto; entry: ReplicaEntry }>,
+    skipped: TimelineViewSpanDto[],
+  ): void {
+    replicaHolder.replaceChildren();
+    renderedLayers = [];
+    replicaWarnings.replaceChildren();
+
+    // Overlay design space — canvas size from the app info (popup root anchors
+    // are relative to the popup layer, canvas-sized). Legacy captures without
+    // app info fall back to the base stage size. Coordinates map 1:1 into the
+    // base stage: full-screen main captures share the popup layer's canvas
+    // units precisely (same scaleFactor, same root-relative rect space).
+    let viewport: { width: number; height: number } | null = null;
+    let baseSize: { width: number; height: number } | null = null;
+    const failures: Array<{ view: string; entry: ReplicaEntry }> = [];
+
+    const compositeEl = document.createElement("div");
+    compositeEl.className = "replica-composite";
+    replicaHolder.appendChild(compositeEl);
+
+    for (const item of resolved) {
+      if (item.entry.parsed === null) {
+        failures.push({ view: item.span?.view ?? item.anchor.view ?? "view", entry: item.entry });
+        continue;
+      }
+      const uiSnapshot = asUISnapshot(item.entry.parsed);
+      const overlay = renderedLayers.length > 0; // the first rendered layer is the base
+      const stageHolder = document.createElement("div");
+      compositeEl.appendChild(stageHolder);
+      const replica = buildReplicaStage(uiSnapshot, stageHolder, themeMode, overlay ? { transparentStage: true } : {});
+      const viewId = item.span?.viewId ?? uiSnapshot.view?.id ?? null;
+      const viewName = item.span?.view ?? uiSnapshot.view?.["name"] ?? "unnamed view";
+      const layerLabel = item.span?.layer ?? uiSnapshot.view?.["layer"] ?? "DEFAULT";
+
       // Materialize the *applied* theme as --m3-* vars for CSS that reads
       // tokens (switch track/thumb, chip borders) — parity with the standalone.
       injectTheme(themeMode === "raw" ? uiSnapshot.theme : defaultLightTheme(), replica.stage);
-      requestAnimationFrame(() => fitReplica(replica.stage, replicaViewport));
 
-      renderedAnchor = index;
-      renderedTheme = themeMode;
-      const warnings = entry.parsed.warnings ?? [];
-      replicaWarnings.replaceChildren(
-        ...warnings.map((text) => {
+      if (viewport === null) viewport = canvasViewportOf(uiSnapshot);
+      if (baseSize === null) baseSize = { width: replica.width, height: replica.height };
+
+      if (overlay) {
+        const vp = viewport ?? { width: replica.width, height: replica.height };
+        const placement = overlayPlacementFor(uiSnapshot, vp);
+        replica.stage.classList.add("overlay-stage");
+        replica.stage.style.left = `${placement.left}px`;
+        replica.stage.style.top = `${placement.top}px`;
+        const chip = document.createElement("span");
+        chip.className = "replica-layer-chip";
+        const label = `${viewName} · ${layerLabel}${placement.mode === "center" ? " · centered" : ""}`;
+        chip.textContent = label;
+        chip.title = `Overlay capture — canvas layer ${layerLabel}\n${placement.mode === "center" ? "anchor data missing → centered on the base" : "placed from the captured root anchor"}`;
+        replica.stage.appendChild(chip);
+      }
+      replica.stage.dataset.spanId = item.span !== null ? String(item.span.index) : "";
+      replica.stage.dataset.viewId = viewId ?? "";
+      renderedLayers.push({ span: item.span, anchor: item.anchor, stage: replica.stage, viewId });
+    }
+
+    // Warning/skip chips (before the empty-return so failures are visible).
+    const warningChips: Array<HTMLDivElement> = [];
+    for (const item of resolved) {
+      const view = item.span?.view ?? item.anchor.view ?? "";
+      if (item.entry.parsed === null) {
+        const chip = document.createElement("div");
+        chip.className = "warn-chip";
+        chip.textContent = `⚠ ${view ? `${view}: ` : ""}${describeFetchError(item.entry)}`;
+        warningChips.push(chip);
+      } else {
+        const prefix = resolved.length > 1 && view ? `${view}: ` : "";
+        for (const text of item.entry.parsed.warnings ?? []) {
           const chip = document.createElement("div");
           chip.className = "warn-chip";
-          chip.textContent = `⚠ ${text}`;
-          return chip;
-        }),
-      );
-      replicaMeta.textContent = anchorName(anchor);
-      const viewName = entry.parsed.view?.["name"] ?? "unnamed view";
-      replicaFooter.textContent = `${fmtStamp(anchor.ms)} · ${viewName} · ${entry.parsed.nodes.length} nodes · schema v${entry.parsed.schemaVersion}`;
-      replicaEmpty.classList.add("hidden");
+          chip.textContent = `⚠ ${prefix}${text}`;
+          warningChips.push(chip);
+        }
+      }
+    }
+    for (const span of skipped) {
+      const chip = document.createElement("div");
+      chip.className = "warn-chip";
+      chip.textContent = `▣ ${span.view} — span on screen, but its capture chain holds no snapshots`;
+      warningChips.push(chip);
+    }
+    replicaWarnings.replaceChildren(...warningChips);
+
+    if (renderedLayers.length === 0) {
+      // Every layer failed to fetch.
+      liveComposite = null;
+      liveBaseSize = null;
+      renderedLayers = [];
+      replicaMeta.textContent = "—";
+      replicaFooter.textContent = failures.length > 0 ? failures[0]!.entry.error?.message ?? "" : "";
+      replicaEmpty.textContent = failures.map((failure) => describeFetchError(failure.entry)).join(" · ");
+      replicaEmpty.classList.remove("hidden");
+      applyReplicaHighlight();
+      return;
+    }
+
+    const base = renderedLayers[0]!;
+    compositeEl.style.width = `${baseSize!.width}px`;
+    compositeEl.style.height = `${baseSize!.height}px`;
+    liveComposite = compositeEl;
+    liveBaseSize = baseSize!;
+
+    replicaMeta.replaceChildren();
+    replicaMeta.textContent = anchorName(base.anchor);
+    for (const layer of renderedLayers.slice(1)) {
+      const chip = document.createElement("span");
+      chip.className = "chip info small";
+      chip.textContent = `⬒ ${layer.span?.view ?? layer.anchor.view}`;
+      chip.title = `overlay layer · ${anchorName(layer.anchor)}`;
+      replicaMeta.appendChild(chip);
+    }
+
+    const layers = renderedLayers;
+    const single = layers.length === 1;
+    const viewNames = layers
+      .map((layer) => (layer.span?.view ?? layer.anchor.view) ?? "unnamed view")
+      .join(single ? "" : " + ");
+    const layer = resolved.find((item) => item.entry.parsed !== null)?.entry.parsed ?? null;
+    if (layer !== null) {
+      replicaFooter.textContent = `${fmtStamp(base.anchor.ms)} · ${viewNames ?? "unnamed view"} · ${layer.nodes.length} nodes · schema v${layer.schemaVersion}`;
+    } else {
+      replicaFooter.textContent = `${fmtStamp(base.anchor.ms)} · ${viewNames ?? "unnamed view"} · schema v?`;
+    }
+    replicaEmpty.classList.add("hidden");
+    applyReplicaHighlight();
+    // Fit after layout settles (zoom applies to the composite wrapper).
+    requestAnimationFrame(() => {
+      replicaFitScale = computeFitScale();
+      applyReplicaZoom();
     });
+  }
+
+  /* -------------------------------------------------------- replica zoom */
+
+  /** Zoom stays a multiplier over the fit scale (≤ 8× fit = at least the
+   *  native capture size); 1 is exactly "fit in panel". */
+  function setReplicaZoom(level: number): void {
+    const clamped = Math.min(Math.max(level, 1), REPLICA_MAX_ZOOM);
+    if (Math.abs(clamped - replicaZoom) < 1e-4) return;
+    replicaZoom = clamped;
+    applyReplicaZoom();
+  }
+
+  function applyReplicaZoom(): void {
+    const composite = liveComposite;
+    const noStage = composite === null || liveBaseSize === null;
+    zoomOutBtn.disabled = noStage || replicaZoom <= 1 + 1e-4;
+    zoomInBtn.disabled = noStage || replicaZoom >= REPLICA_MAX_ZOOM - 1e-4;
+    zoomFitBtn.disabled = noStage || replicaZoom <= 1 + 1e-4;
+    zoom11Btn.disabled = noStage || replicaFitScale === 0;
+    if (composite !== null) {
+      composite.style.zoom = String(replicaFitScale * replicaZoom);
+      if (replicaZoom <= 1 + 1e-4) replicaHolder.scrollTo({ left: 0, top: 0, behavior: "auto" });
+    }
+    zoomLevel.textContent = noStage ? "—" : `${Math.round(replicaFitScale * replicaZoom * 100)}%`;
+  }
+
+  /* --------------------------------------------------- selection highlight */
+
+  /**
+   * Outline the selected event's UI element inside the composite (2026-10-20,
+   * composite rework 2026-10-21): the event's view is one layer of the
+   * composite — if that view is on screen at the playhead, the element is
+   * highlighted in *its* stage and the focused-layer outline marks the stage.
+   * The stage exposes every node as `[data-node-id]`; the highlight is a
+   * dedicated overlay element appended to the node — removed again on the
+   * next application. Not-found (element created after the capture, or the
+   * view not on screen at all) is reported in the meta chip, honestly.
+   */
+  function applyReplicaHighlight(): void {
+    replicaHolder.querySelectorAll(".event-node-highlight").forEach((node) => node.remove());
+    for (const stage of replicaHolder.querySelectorAll<HTMLElement>(".layer-focused")) {
+      stage.classList.remove("layer-focused");
+    }
+    const selection = selectedEventIndex !== -1 ? timeline.events[selectedEventIndex] : undefined;
+    const chip = replicaMeta.querySelector<HTMLElement>("#tl-sel-chip");
+    if (selection === undefined) {
+      chip?.remove();
+      return;
+    }
+
+    const label =
+      selection.elementType !== null ? `${selection.type} · ${selection.elementType}` : selection.type;
+    const layer =
+      selection.viewId !== null
+        ? renderedLayers.find((candidate) => candidate.stage !== null && candidate.viewId === selection.viewId) ?? null
+        : null;
+    const target =
+      layer !== null && selection.element !== null
+        ? layer.stage!.querySelector<HTMLElement>(`[data-node-id="${cssEscape(selection.element)}"]`)
+        : null;
+    if (target !== null) {
+      const overlay = document.createElement("div");
+      overlay.className = "event-node-highlight";
+      target.appendChild(overlay);
+    }
+    if (layer !== null) {
+      // Tool chrome: the focused composite layer reads at a glance.
+      layer.stage!.classList.add("layer-focused");
+    }
+
+    const node = chip ?? document.createElement("span");
+    node.id = "tl-sel-chip";
+    node.className = `chip ${target !== null ? "info" : "warn"} small`;
+    node.textContent =
+      target !== null ? `◆ ${label}` : layer !== null ? `◆ ${label} · not in this capture` : `◆ ${label} · view not on screen`;
+    node.title = [
+      `event ${selection.type} @ ${fmtStamp(playheadMs)}`,
+      selection.element !== null ? `element ${selection.element}` : "element —",
+      target !== null
+        ? "highlighted in the replica"
+        : layer !== null
+          ? "no matching node in this capture"
+          : "this view is not on screen at the playhead",
+    ].join("\n");
+    if (chip === null) replicaMeta.appendChild(node);
   }
 
   /* --------------------------------------------------------------- drawing */
@@ -361,13 +796,207 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     return false;
   }
 
-  function laneStyle(ctx: CanvasRenderingContext2D, cssW: number): void {
-    for (let i = 0; i < LANES.length; i++) {
-      ctx.fillStyle = i % 2 === 0 ? "#111318" : "#0e1116";
-      ctx.fillRect(0, RULER_H + i * LANE_H, cssW, LANE_H);
+  function rowStyle(ctx: CanvasRenderingContext2D, cssW: number): void {
+    const firstRow = Math.max(0, Math.floor(scrollY / ROW_H));
+    const lastRow = Math.min(totalRows - 1, Math.ceil((scrollY + visibleRowsH) / ROW_H));
+    for (let row = firstRow; row <= lastRow; row++) {
+      ctx.fillStyle = row % 2 === 0 ? "#111318" : "#0e1116";
+      ctx.fillRect(0, rowY(row), cssW, ROW_H);
     }
-    ctx.fillStyle = "#1a1d24";
-    ctx.fillRect(0, laneBottom, cssW, FILM_H);
+  }
+
+  function drawRowClips(ctx: CanvasRenderingContext2D, cssW: number): void {
+    // Rows scroll under the pinned ruler: clip the row region, then draw.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, RULER_H, cssW, canvasH - RULER_H);
+    ctx.clip();
+    rowStyle(ctx, cssW);
+    for (const [row, spans] of rowSpans) {
+      const y = rowY(row);
+      if (y + ROW_H < RULER_H || y > canvasH) continue;
+      for (const entry of spans) drawSpanClip(ctx, entry, row, cssW);
+    }
+    if (orphanCount > 0) drawNoViewRow(ctx, cssW);
+    ctx.restore();
+  }
+
+  /** One view life-cycle as a clip on its track: filmstrip blocks of the span's own snapshots, span events as marbles inside. */
+  function drawSpanClip(ctx: CanvasRenderingContext2D, entry: RowSpan, row: number, cssW: number): void {
+    const span = entry.span;
+    const x0 = pxAt(span.openMs);
+    const x1 = span.closeMs !== null ? pxAt(span.closeMs) : cssW;
+    if (x1 < -4 || x0 > cssW + 4) return;
+    const left = Math.max(x0, -4);
+    const right = Math.min(x1, cssW + 4);
+    const y = rowY(row);
+    const blockY = y + 4;
+    const blockH = ROW_H - 8;
+    const [fill, edge] = spanPalette(span.kind, span.stillOpen);
+
+    // Clip background.
+    ctx.fillStyle = fill;
+    roundRectPath(ctx, left, blockY, Math.max(right - left, 2), blockH, 4);
+    ctx.fill();
+    // Open + closure markers.
+    ctx.fillStyle = edge;
+    if (x0 >= -2 && x0 <= cssW) ctx.fillRect(x0, blockY, 2, blockH);
+    if (span.closeMs !== null && x1 - 2 >= -2 && x1 - 2 <= cssW) ctx.fillRect(x1 - 2, blockY, 2, blockH);
+
+    // Filmstrip: this span's own snapshot captures, each block held until the
+    // next capture (or the span's end) — scoped to the view that was on screen.
+    for (let i = 0; i < entry.anchors.length; i++) {
+      const anchor = entry.anchors[i]!;
+      const nextAnchor = entry.anchors[i + 1];
+      const ax0 = pxAt(anchor.ms);
+      const axEnd = nextAnchor !== undefined ? pxAt(nextAnchor.ms) : x1;
+      const w = Math.max(16, Math.min(axEnd - ax0 - 1, 240));
+      if (axEnd < -4 || ax0 > cssW + 4) continue;
+      const minimap = minimaps.get(anchor.index);
+      if (minimap === undefined) {
+        ensureMinimap(anchor.index);
+        ctx.strokeStyle = "#4b4453";
+        ctx.strokeRect(ax0 + 0.5, blockY + 0.5, w - 1, blockH - 1);
+      } else {
+        drawMiniMap(
+          ctx,
+          minimap,
+          ax0 + 1,
+          blockY,
+          Math.max(1, w - 2),
+          blockH,
+          minimap.blocks.length > 0 ? FILM_BG : FILM_EMPTY_BG,
+        );
+        if (minimap.warnings.length > 0 && w > 40) {
+          ctx.fillStyle = "#f2b8b5";
+          ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+          ctx.fillText("⚠", ax0 + 5, blockY + 12);
+        }
+      }
+      // Capture boundary marker.
+      if (ax0 >= 0 && ax0 <= cssW) {
+        ctx.fillStyle = "rgba(138,180,248,0.75)";
+        ctx.fillRect(ax0, blockY, 2, blockH);
+      }
+    }
+
+    // Span label chip (readable over filmstrip blocks and row gaps alike).
+    const dwell = span.dwellSeconds ?? (x1 - x0) / 1000;
+    const kindMark = span.kind === "popup" ? " ⬒" : span.kind === "inferred" ? " ⌛" : "";
+    const spanLabel = span.stillOpen
+      ? `▶ ${span.view}${kindMark} · still open`
+      : `${span.view}${kindMark} · ${dwell >= 100 ? dwell.toFixed(0) : dwell.toFixed(2)}s`;
+    if (right - left > 70) {
+      ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const text = clipText(ctx, spanLabel, right - left - 14);
+      const chipW = Math.min(right - left - 10, ctx.measureText(text).width + 10);
+      ctx.fillStyle = "rgba(8,10,14,0.6)";
+      roundRectPath(ctx, left + 5, blockY + 2, chipW, 13, 4);
+      ctx.fill();
+      ctx.fillStyle = "#dde2ea";
+      ctx.fillText(text, left + 10, blockY + 4);
+    }
+
+    drawEventMarbles(ctx, entry.events, rowCenter(row), cssW);
+  }
+
+  /** The "no view attribution" pseudo row — events the timeline cannot place on any view track (never dropped). */
+  function drawNoViewRow(ctx: CanvasRenderingContext2D, cssW: number): void {
+    const y = rowY(NO_VIEW_ROW);
+    if (y + ROW_H < RULER_H || y > canvasH) return;
+    ctx.fillStyle = "#262b33";
+    ctx.fillRect(0, y, cssW, ROW_H);
+    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.fillStyle = "#5b6470";
+    ctx.fillText("no view attribution", 8, y + 5);
+    drawEventMarbles(ctx, orphanEvents, rowCenter(NO_VIEW_ROW), cssW);
+  }
+
+  /** Events of one row as marbles centered in the band; crowded clusters collapse into a per-pixel density bar. */
+  function drawEventMarbles(
+    ctx: CanvasRenderingContext2D,
+    events: TimelineEventDto[],
+    y: number,
+    cssW: number,
+  ): void {
+    // Bucket per pixel column: sparse ⇒ marbles, dense ⇒ density bar.
+    const columns = cssW + 1;
+    const counts = new Int32Array(columns);
+    const colors: Array<string | null> = new Array<string | null>(columns).fill(null);
+    const unresolvedColumns = new Int32Array(columns);
+    let crowded = 0;
+    for (const event of events) {
+      if (event.ms > viewEnd + 1e-6) break;
+      const column = Math.floor(pxAt(event.ms) + 0.5);
+      if (column < 0 || column >= columns) continue;
+      counts[column]! += 1;
+      const color =
+        event.type === "toggle"
+          ? event.on
+            ? MARBLE_COLORS.toggle_on
+            : MARBLE_COLORS.toggle_off
+          : marbleColor(event.type);
+      colors[column] = color;
+      if (event.unresolved) unresolvedColumns[column] = 1;
+      if (counts[column]! > 1) crowded++;
+    }
+
+    if (crowded === 0) {
+      // Sparse: marbles; unresolved events get a hollow ring.
+      for (let column = 0; column < columns; column++) {
+        if (counts[column] === 0) continue;
+        ctx.beginPath();
+        ctx.arc(column + 0.5, y, 5, 0, Math.PI * 2);
+        if (unresolvedColumns[column] === 1) {
+          ctx.fillStyle = "rgba(242,184,181,0.35)";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = MARBLE_COLORS.unresolved;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = colors[column]!;
+          ctx.fill();
+          if (colors[column] === MARBLE_COLORS.toggle_on || colors[column] === MARBLE_COLORS.toggle_off) {
+            ctx.fillStyle = colors[column] === MARBLE_COLORS.toggle_on ? "#1d192b" : "#e6e0e9";
+            ctx.fillRect(column - 1, y - 2, 3, 3);
+          }
+        }
+      }
+      return;
+    }
+
+    // Crowded: per-column density bars keep 5k sessions at 60 fps.
+    for (let column = 0; column < columns; column++) {
+      if (counts[column] === 0) continue;
+      const density = Math.min(1, 0.3 + counts[column]! / 12);
+      ctx.fillStyle = colors[column] ?? MARBLE_COLORS.unresolved;
+      ctx.globalAlpha = density;
+      ctx.fillRect(column, y - ROW_H * 0.3, 1, ROW_H * 0.6);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /** Selection ring: bold circle around the selected event's marble. */
+  function drawSelection(ctx: CanvasRenderingContext2D, cssW: number): void {
+    const selection = selectedEventIndex !== -1 ? timeline.events[selectedEventIndex] : undefined;
+    if (selection === undefined) return;
+    const x = Math.round(pxAt(selection.ms)) + 0.5;
+    if (x < -14 || x > cssW + 14) return;
+    const row = rowOfEvent(selection);
+    const y = rowCenter(row);
+    if (y < RULER_H - 14 || y > canvasH + 14) return;
+    // Double stroke: wide translucent halo + crisp core — visible over
+    // marble and density-bar backgrounds alike.
+    ctx.strokeStyle = "rgba(253,214,99,0.35)";
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#fdd663";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.stroke();
   }
 
   function drawRuler(ctx: CanvasRenderingContext2D, cssW: number): void {
@@ -432,160 +1061,20 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     return `${fmtRel(ms)} · ${fmtAbs(ms)}`;
   }
 
-  function drawSpans(ctx: CanvasRenderingContext2D, cssW: number): void {
-    const y = RULER_H + 7;
-    const h = LANE_H - 14;
-    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.textBaseline = "top";
+  /** Row of the nearest span of a view (legacy events without a valid spanId still render on their view's track). */
+  function rowOfNearestSpan(spanId: number | null, viewId: string): number | null {
+    if (spanId !== null) return rowOfSpanId.get(spanId) ?? null;
+    let best: TimelineViewSpanDto | null = null;
     for (const span of timeline.viewSpans) {
-      const x0 = pxAt(span.openMs);
-      const x1 = span.closeMs !== null ? pxAt(span.closeMs) : cssW;
-      if (x1 < -2 || x0 > cssW + 2) continue;
-      const left = Math.max(x0, -2);
-      const right = Math.min(x1, cssW + 2);
-      ctx.fillStyle = span.stillOpen ? "rgba(208,188,255,0.22)" : "rgba(138,180,248,0.16)";
-      roundRectPath(ctx, left, y, Math.max(right - left, 2), h, 4);
-      ctx.fill();
-      // open + closure markers
-      ctx.fillStyle = span.stillOpen ? "#d0bcff" : "#8ab4f8";
-      ctx.fillRect(x0, y, 2, h);
-      if (span.closeMs !== null) ctx.fillRect(Math.min(x1, cssW - 2) - 0, y, 2, h);
-      const dwell = span.dwellSeconds ?? (x1 - x0) / 1000;
-      const spanLabel =
-        span.stillOpen
-          ? `${span.view} · still open`
-          : `${span.view} · ${dwell >= 100 ? dwell.toFixed(0) : dwell.toFixed(2)}s`;
-      if (right - left > 70) {
-        ctx.fillStyle = "#dde2ea";
-        ctx.fillText(clipText(ctx, spanLabel, right - left - 10), left + 6, y + 4);
+      if (span.viewId !== viewId) continue;
+      if (best === null || span.row < best.row || (span.row === best.row && span.index < best.index)) {
+        best = span;
       }
     }
+    return best !== null ? Math.max(best.row, 0) : null;
   }
 
-  function drawLaneMarbles(ctx: CanvasRenderingContext2D, laneId: LaneId, cssW: number): void {
-    const y = RULER_H + LANES.findIndex((l) => l.id === laneId) * LANE_H + LANE_H / 2;
-    const events = timeline.events;
-
-    // Binary search: first event index with ms ≥ viewStart - ε.
-    let lo = 0;
-    let hi = events.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (events[mid]!.ms < viewStart - 1e-6) lo = mid + 1;
-      else hi = mid;
-    }
-
-    // Bucket per pixel column: sparse ⇒ marbles, dense ⇒ density bar.
-    const columns = cssW + 1;
-    const counts = new Int32Array(columns);
-    const colors: Array<string | null> = new Array(columns).fill(null);
-    let crowded = 0;
-    for (let i = lo; i < events.length; i++) {
-      const event = events[i]!;
-      if (event.ms > viewEnd + 1e-6) break;
-      if (event.lane !== laneId) continue;
-      const column = Math.floor(pxAt(event.ms) + 0.5);
-      if (column < 0 || column >= columns) continue;
-      counts[column]! += 1;
-      const color =
-        laneId === "toggle"
-          ? event.on
-            ? MARBLE_COLORS.toggle_on
-            : MARBLE_COLORS.toggle_off
-          : marbleColor(laneId);
-      colors[column] = color;
-      if (counts[column]! > 1) crowded++;
-    }
-
-    if (crowded === 0) {
-      // Sparse: marbles. Unresolved events get a hollow ring treatment.
-      for (let column = 0; column < columns; column++) {
-        if (counts[column] === 0) continue;
-        const color = colors[column]!;
-        ctx.beginPath();
-        ctx.arc(column + 0.5, y, 5, 0, Math.PI * 2);
-        if (laneId === "unresolved") {
-          ctx.fillStyle = "rgba(242,184,181,0.35)";
-          ctx.fill();
-          ctx.lineWidth = 1.5;
-          ctx.strokeStyle = MARBLE_COLORS.unresolved;
-          ctx.stroke();
-        } else {
-          ctx.fillStyle = color;
-          ctx.fill();
-          if (laneId === "toggle") {
-            ctx.fillStyle = colors[column] === MARBLE_COLORS.toggle_on ? "#1d192b" : "#e6e0e9";
-            ctx.fillRect(column - 1, y - 2, 3, 3);
-          }
-        }
-      }
-      return;
-    }
-
-    // Crowded: per-column density bars keep 5k sessions at 60 fps.
-    const fallback = marbleColor(laneId);
-    for (let column = 0; column < columns; column++) {
-      if (counts[column] === 0) continue;
-      const density = Math.min(1, 0.3 + counts[column]! / 12);
-      ctx.fillStyle = colors[column] ?? fallback;
-      ctx.globalAlpha = density;
-      ctx.fillRect(column, y - LANE_H * 0.3, 1, LANE_H * 0.6);
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function drawFilmstrip(ctx: CanvasRenderingContext2D, cssW: number): void {
-    ctx.fillStyle = "#151521";
-    ctx.fillRect(0, laneBottom, cssW, FILM_H);
-    ctx.fillStyle = "#2a2f38";
-    ctx.fillRect(0, laneBottom - 1, cssW, 1);
-    const anchors = timeline.snapshots;
-    if (anchors.length === 0) {
-      ctx.fillStyle = "#8f8a96";
-      ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillText("filmstrip: no snapshot capture in this session", 8, laneBottom + 26);
-      return;
-    }
-    const stripY = laneBottom + 6;
-    const stripH = FILM_H - 12;
-    for (let i = 0; i < anchors.length; i++) {
-      const anchor = anchors[i]!;
-      const nextAnchor = anchors[i + 1];
-      const x0 = pxAt(anchor.ms);
-      const xEnd = nextAnchor !== undefined ? pxAt(nextAnchor.ms) : cssW;
-      const w = Math.max(16, Math.min(xEnd - x0 - 1, 240));
-      if (xEnd < -4 || x0 > cssW + 4) continue;
-      const minimap = minimaps.get(anchor.index);
-      if (minimap === undefined) {
-        ensureMinimap(anchor.index);
-        ctx.strokeStyle = "#4b4453";
-        ctx.strokeRect(x0 + 0.5, stripY + 0.5, w - 1, stripH - 1);
-        continue;
-      }
-      drawMiniMap(
-        ctx,
-        minimap,
-        x0 + 1,
-        stripY,
-        Math.max(1, w - 2),
-        stripH,
-        minimap.blocks.length > 0 ? FILM_BG : FILM_EMPTY_BG,
-      );
-      // capture boundary marker + index chip
-      ctx.fillStyle = "rgba(138,180,248,0.9)";
-      ctx.fillRect(x0, laneBottom, 2, FILM_H);
-      if (w > 40) {
-        ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.fillStyle = "#c4cad4";
-        ctx.fillText(clipText(ctx, `#${i + 1} ${anchor.view ?? ""}`, w - 10), x0 + 5, stripY + 2);
-        if (minimap.warnings.length > 0) {
-          ctx.fillStyle = "#f2b8b5";
-          ctx.fillText("⚠", x0 + 5, stripY + 14);
-        }
-      }
-    }
-  }
-
+  /** Selection ring: bold circle around the selected event's marble. */
   function drawPlayhead(ctx: CanvasRenderingContext2D, cssW: number): void {
     const x = Math.round(pxAt(playheadMs)) + 0.5;
     ctx.strokeStyle = "#fdd663";
@@ -616,16 +1105,11 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     const cssW = canvasWidth();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssW, canvasH);
-    laneStyle(ctx, cssW);
+    drawRowClips(ctx, cssW);
+    // Ruler + overlays pin above the (scrollable) rows.
     drawRuler(ctx, cssW);
-    drawSpans(ctx, cssW);
-    for (const lane of LANES) {
-      if (lane.id === "views") continue; // drawn via spans + open/close marbles
-      drawLaneMarbles(ctx, lane.id, cssW);
-    }
-    drawLaneMarbles(ctx, "views", cssW);
-    drawFilmstrip(ctx, cssW);
     drawPlayhead(ctx, cssW);
+    drawSelection(ctx, cssW);
   }
 
   let frames = 0;
@@ -753,35 +1237,135 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
         panBy(event.deltaX);
         return;
       }
-      const factor = Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0016));
-      zoomAround(factor, localPx(event.clientX));
+      // Trackpad pinch (ctrlKey) always zooms; a plain vertical wheel scrolls
+      // rows whenever the session has more tracks than the viewport holds
+      // (hitting the scroll edge hands back to zoom).
+      if (event.ctrlKey) {
+        zoomAround(Math.exp(-event.deltaY * 0.01), localPx(event.clientX));
+        return;
+      }
+      if (maxScrollY > 0) {
+        const next = clampScrollY(scrollY + event.deltaY);
+        if (next !== scrollY) {
+          scrollY = next;
+          dirty = true;
+          return;
+        }
+      }
+      zoomAround(Math.exp(-event.deltaY * 0.0016), localPx(event.clientX));
     },
     { passive: false },
   );
 
+  /** The RowSpan entry of a span (filmstrip blocks etc.). */
+  function rowEntryOf(span: TimelineViewSpanDto): RowSpan | undefined {
+    return rowSpans.get(Math.max(span.row, 0))?.find((entry) => entry.span === span);
+  }
+
+  /** Row (track) an event belongs to, for hit-testing and reveal. */
+  function rowOfEvent(event: TimelineEventDto): number {
+    const spanId = event.spanId ?? nearestSpanIdFor(event.viewId, event.ms);
+    if (spanId !== null) {
+      const row = rowOfSpanId.get(spanId);
+      if (row !== undefined) return row;
+    }
+    if (event.viewId !== null) return rowOfNearestSpan(event.spanId, event.viewId) ?? NO_VIEW_ROW;
+    return NO_VIEW_ROW;
+  }
+
+  /** Explicit focus request (filmstrip click); survives the sneaky focus from setPlayheadMs. */
+  function focusSpan(index: number): void {
+    focusedSpanId = index;
+    focusedSpanWasJustClicked = true;
+    dirty = true;
+  }
+
   canvas.addEventListener("click", (event) => {
-    // Filmstrip block click = snap to that capture ("scene change").
     const y = event.clientY - canvas.getBoundingClientRect().top;
-    if (y < laneBottom) return;
-    const t = msAt(localPx(event.clientX));
-    let bestIndex = -1;
-    let bestDiff = Number.POSITIVE_INFINITY;
-    for (const anchor of timeline.snapshots) {
-      const diff = Math.abs(anchor.ms - t);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestIndex = anchor.index;
+    if (y < RULER_H) return; // ruler scrub handles its own
+    const row = rowAt(y);
+    if (row < 0 || row >= totalRows) return;
+    const x = localPx(event.clientX);
+    const t = msAt(x);
+
+    // A clip on this row? Clicking inside it focuses the view + snaps to its
+    // nearest capture ("scene change") — popup rows render the popup replica.
+    if (row < rowCount) {
+      const entries = rowSpans.get(row) ?? [];
+      const hit = entries.find((entry) => {
+        const x0 = pxAt(entry.span.openMs);
+        const x1 = entry.span.closeMs !== null ? pxAt(entry.span.closeMs) : canvasWidth();
+        return x >= x0 && x <= x1;
+      });
+      if (hit !== undefined) {
+        focusSpan(hit.span.index);
+        let bestDiff = Number.POSITIVE_INFINITY;
+        for (const anchor of hit.anchors) {
+          const diff = Math.abs(anchor.ms - t);
+          if (diff < bestDiff) bestDiff = diff;
+        }
+        if (hit.anchors.length > 0 && bestDiff < (viewEnd - viewStart) / 4) {
+          let best = hit.anchors[0]!;
+          for (const anchor of hit.anchors) {
+            if (Math.abs(anchor.ms - t) < Math.abs(best.ms - t)) best = anchor;
+          }
+          setPlayheadMs(best.ms);
+          return;
+        }
+        setPlayheadMs(t);
+        return;
       }
     }
-    if (bestIndex !== -1 && bestDiff < (viewEnd - viewStart) / 4) {
-      setPlayheadMs(timeline.snapshots.find((a) => a.index === bestIndex)!.ms);
-    }
+    // Row background or no-view row: plain playhead placement (focus then
+    // follows the nearest event's view via setPlayheadMs).
+    setPlayheadMs(t);
   });
 
+  /** Index of the event temporally nearest to t (either side), or -1 when
+   *  the session has no events. Binary search for the insertion point, then
+   *  compare the flanking events. Ties resolve to the earlier event. */
+  function closestEventIndex(t: number): number {
+    const events = timeline.events;
+    if (events.length === 0) return -1;
+    let lo = 0;
+    let hi = events.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (events[mid]!.ms < t) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === 0) return 0;
+    if (lo === events.length) return events.length - 1;
+    const prev = events[lo - 1]!;
+    const next = events[lo]!;
+    return t - prev.ms <= next.ms - t ? lo - 1 : lo;
+  }
+
   function setPlayheadMs(t: number): void {
+    // Track-head invariant (2026-10-20 regression): the playhead snaps to the
+    // *closest event* and can never rest between events — scrubbing, plain
+    // clicks, filmstrip clicks and Home/End all funnel through here. Ties at
+    // the same ms select one index deterministically.
     const clamped = Math.min(Math.max(t, lo0), hi0);
-    if (Math.abs(clamped - playheadMs) < 1e-9) return;
-    playheadMs = clamped;
+    const index = closestEventIndex(clamped);
+    const snapped = index !== -1 ? timeline.events[index]!.ms : clamped;
+    if (index === selectedEventIndex && (index !== -1 || Math.abs(snapped - playheadMs) < 1e-9)) {
+      return;
+    }
+    selectedEventIndex = index;
+    playheadMs = snapped;
+    // Follow selection: the replica switches to the view of the selected
+    // event — unless a filmstrip-block click just focused its span explicitly.
+    if (index !== -1 && !focusedSpanWasJustClicked) {
+      const selection = timeline.events[index]!;
+      const spanId = selection.spanId ?? nearestSpanIdFor(selection.viewId, selection.ms);
+      if (spanId !== null && focusedSpanId !== spanId) {
+        focusedSpanId = spanId;
+        dirty = true;
+      }
+    } else if (focusedSpanWasJustClicked) {
+      focusedSpanWasJustClicked = false; // consumed: later moves follow selection again
+    }
     dirty = true;
     syncReplica();
   }
@@ -836,6 +1420,9 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
       const span = viewEnd - viewStart;
       setWindow(t - span * 0.45, t + span * 0.55);
     }
+    // Vertical: the selected event's row scrolls into the viewport.
+    const selection = selectedEventIndex !== -1 ? timeline.events[selectedEventIndex] : undefined;
+    if (selection !== undefined) revealRow(rowOfEvent(selection));
   }
 
   function onKeyDown(event: KeyboardEvent): void {
@@ -904,13 +1491,28 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     });
   }
 
+  zoomOutBtn.addEventListener("click", () => setReplicaZoom(replicaZoom / 1.25));
+  zoomInBtn.addEventListener("click", () => setReplicaZoom(replicaZoom * 1.25));
+  zoomFitBtn.addEventListener("click", () => setReplicaZoom(1));
+  zoom11Btn.addEventListener("click", () => setReplicaZoom(1 / Math.max(replicaFitScale, 1e-6)));
+
   syncReplica();
   raf = requestAnimationFrame(frame);
 
   const resizeObserver = new ResizeObserver(() => {
     dirty = true;
+    // The replica viewport resizes with the page (panel below the strip):
+    // re-fit to the current box, keeping the user's zoom multiplier.
+    if (liveComposite !== null) {
+      requestAnimationFrame(() => {
+        replicaFitScale = computeFitScale();
+        applyReplicaZoom();
+        dirty = true;
+      });
+    }
   });
   resizeObserver.observe(wrap);
+  resizeObserver.observe(replicaViewport);
 
   return {
     destroy() {
@@ -950,6 +1552,15 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
       <aside class="replica-panel panel">
         <div class="replica-head">
           <div class="replica-title">UI replica @ playhead</div>
+          <div class="replica-zoom">
+            <div class="segmented" id="tl-replica-zoom" role="toolbar" aria-label="Replica zoom">
+              <button type="button" id="tl-zoom-out" title="zoom out (wheel over the replica works too)">−</button>
+              <button type="button" id="tl-zoom-11" title="native 1:1 scale">1:1</button>
+              <button type="button" id="tl-zoom-fit" title="reset: fit the capture into the panel">⤢</button>
+              <button type="button" id="tl-zoom-in" title="zoom in (wheel over the replica works too)">+</button>
+            </div>
+            <span class="zoom-level" id="tl-zoom-level">—</span>
+          </div>
           <div class="segmented" id="tl-theme-toggle" role="tablist" aria-label="Theme mode">
             <button type="button" data-mode="default-light" role="tab">Default light</button>
             <button type="button" data-mode="raw" role="tab">Raw</button>
@@ -965,7 +1576,7 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
       </aside>
     </main>
     <footer class="hints">
-      <span>wheel zoom (at cursor) · shift+wheel pan · drag pan · click sets playhead · drag ruler handle scrubs · ←/→ events · PgUp/PgDn snapshots · Home/End · dbl-click fit</span>
+      <span>wheel scrolls tracks (more than 3) / zooms · shift+wheel pan · ctrl+wheel/pinch zoom · drag pan · click sets playhead · click a clip snaps its capture · drag ruler handle scrubs · ←/→ events · PgUp/PgDn snapshots · Home/End · dbl-click fit · replica: wheel zooms · drag pans</span>
       <span class="hint" id="tl-fps"></span>
     </footer>
   `;
@@ -986,6 +1597,10 @@ function asUISnapshot(parsed: ParsedSnapshotDto): UISnapshot {
 
 function shortId(id: string): string {
   return id.length > 24 ? `${id.slice(0, 6)}…${id.slice(-6)}` : id;
+}
+
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" ? CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 function escapeHtml(value: string): string {

@@ -54,6 +54,13 @@ namespace mdu.ui.telemetry.events
         /// <summary>Short view type name, e.g. "UIDemoMainMenu".</summary>
         public string viewName;
 
+        /// <summary>
+        /// Canvas layer of the view the event belongs to (<see cref="CanvasLayer"/> name,
+        /// e.g. "POPUP" for dialogs/snackbars). Only written on view_open/view_close
+        /// points; null otherwise.
+        /// </summary>
+        public string layer;
+
         /// <summary>Interacted element's IUI id. Null for view/session points.</summary>
         public string elementId;
 

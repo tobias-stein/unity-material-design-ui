@@ -22,6 +22,7 @@ import type {
   TimelineEvent,
   TimelineLane,
   TimelineSnapshotAnchor,
+  TimelineSpanKind,
   TimelineViewSpan,
 } from "../domain.js";
 
@@ -57,6 +58,8 @@ export interface TimelineFrame {
   events: TimelineEvent[];
   lanes: Array<{ lane: TimelineLane; label: string; count: number }>;
   viewSpans: TimelineViewSpan[];
+  /** Number of NLE rows (tracks) the spans were packed into. */
+  rowCount: number;
   snapshots: TimelineSnapshotAnchor[];
 }
 
@@ -92,6 +95,106 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
     list.push(anchor);
   }
 
+  const startNs = session.startNs ?? session.firstEventNs;
+  const endNs = session.endNs ?? session.lastEventNs;
+  const startNsText = startNs === null ? "0" : startNs.toString();
+  const endNsText = endNs === null ? "0" : endNs.toString();
+  const startMs = nsToExactMs(startNsText);
+  const endMs = nsToExactMs(endNsText);
+
+  // view_ids with runtime lifecycle points — separates "view" from "inferred"
+  // spans on legacy data (inferred popup spans have no lifecycle pair at all).
+  const lifecycleViewIds = new Set<string>();
+  for (const { event, type } of uiEvents) {
+    if ((type === "view_open" || type === "view_close") && event.tags.view_id) {
+      lifecycleViewIds.add(event.tags.view_id);
+    }
+  }
+
+  const spanKindOf = (layer: string | null, viewId: string | null): TimelineSpanKind => {
+    if (layer === "POPUP") return "popup";
+    if (layer !== null) return "view";
+    return viewId !== null && lifecycleViewIds.has(viewId) ? "view" : "inferred";
+  };
+
+  // NLE row packing: spans of the same view share a preferred row (their
+  // fragments are sequential and never overlap), other spans take the lowest
+  // row free at their open — rows free up as spans end, so the track count
+  // stays minimal (audio/video editor layout).
+  const spans: TimelineViewSpan[] = session.views.map((span) => ({
+    index: 0, // assigned after the sort below (it is the array ordinal)
+    view: span.view,
+    viewId: span.viewId,
+    openNs: span.openNs.toString(),
+    openMs: nsToExactMs(span.openNs.toString()),
+    closeNs: span.closeNs === null ? null : span.closeNs.toString(),
+    closeMs: span.closeNs === null ? null : nsToExactMs(span.closeNs.toString()),
+    dwellSeconds: span.dwellSeconds,
+    stillOpen: span.closeNs === null,
+    kind: spanKindOf(span.layer, span.viewId),
+    layer: span.layer,
+    row: -1, // assigned below
+  }));
+  spans.sort((a, b) => (a.openMs < b.openMs ? -1 : a.openMs > b.openMs ? 1 : 0));
+  const rowFreeAtMs: number[] = [];
+  const preferredRowByView = new Map<string, number>();
+  for (const span of spans) {
+    const spanEnd = span.closeMs ?? endMs; // still-open spans hold their row to the frame end
+    let row = span.viewId !== null ? preferredRowByView.get(span.viewId) : undefined;
+    if (row === undefined || rowFreeAtMs[row]! > span.openMs) {
+      row = rowFreeAtMs.findIndex((free) => free <= span.openMs);
+      if (row === -1) row = rowFreeAtMs.length;
+    }
+    rowFreeAtMs[row] = spanEnd;
+    if (span.viewId !== null) preferredRowByView.set(span.viewId, row);
+    span.row = row;
+  }
+  const rowCount = rowFreeAtMs.length;
+
+  // Index the spans by their client-visible ordinal (the sorted array position).
+  spans.forEach((span, index) => {
+    span.index = index;
+  });
+
+  // Spans grouped per view_id for event→span placement.
+  const spansByView = new Map<string, TimelineViewSpan[]>();
+  for (const span of spans) {
+    if (span.viewId === null) continue;
+    let list = spansByView.get(span.viewId);
+    if (list === undefined) {
+      list = [];
+      spansByView.set(span.viewId, list);
+    }
+    list.push(span);
+  }
+
+  /** Span of the event's view that contains (or, failing that, is nearest to) t. */
+  function spanIdFor(viewId: string | null, tMs: number): number | null {
+    if (viewId === null) return null;
+    const list = spansByView.get(viewId);
+    if (list === undefined) return null;
+    for (const span of list) {
+      if (span.openMs <= tMs && (span.closeMs === null || tMs <= span.closeMs)) {
+        return span.index;
+      }
+    }
+    // Outside every span of this view: clamp to the temporally nearest span
+    // (events before the first open / after the last close still belong to
+    // that view's track visually).
+    let best = list[0]!;
+    let bestDist = Math.abs(tMs - best.openMs);
+    for (const span of list) {
+      for (const edge of [span.openMs, span.closeMs ?? Number.POSITIVE_INFINITY]) {
+        const dist = Math.abs(tMs - edge);
+        if (dist < bestDist) {
+          best = span;
+          bestDist = dist;
+        }
+      }
+    }
+    return best.index;
+  }
+
   const events: TimelineEvent[] = uiEvents.map(({ event, type }, index) => {
     const ns = event.timestampNs.toString();
     let lane: TimelineLane | null = null;
@@ -120,6 +223,7 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
       unresolved = true;
       lane = "unresolved";
     }
+    const viewId = event.tags.view_id ?? null;
     return {
       index,
       ns,
@@ -127,7 +231,8 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
       type,
       lane,
       view: event.tags.view ?? null,
-      viewId: event.tags.view_id ?? null,
+      viewId,
+      spanId: spanIdFor(viewId, nsToExactMs(ns)),
       element: event.tags.element ?? null,
       elementType: event.tags.element_type ?? null,
       on: event.fields.on ?? null,
@@ -142,31 +247,18 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
   for (const event of events) laneCounts.set(event.lane, (laneCounts.get(event.lane) ?? 0) + 1);
   const lanes = LANE_ORDER.map((lane) => ({ lane, label: LANE_LABELS[lane], count: laneCounts.get(lane) ?? 0 }));
 
-  const viewSpans = session.views.map((span, index) => ({
-    index,
-    view: span.view,
-    viewId: span.viewId,
-    openNs: span.openNs.toString(),
-    openMs: nsToExactMs(span.openNs.toString()),
-    closeNs: span.closeNs === null ? null : span.closeNs.toString(),
-    closeMs: span.closeNs === null ? null : nsToExactMs(span.closeNs.toString()),
-    dwellSeconds: span.dwellSeconds,
-    stillOpen: span.closeNs === null,
-  }));
-
-  const startNs = session.startNs ?? session.firstEventNs;
-  const endNs = session.endNs ?? session.lastEventNs;
   return {
     sessionId: session.id,
-    startNs: startNs === null ? "0" : startNs.toString(),
-    endNs: endNs === null ? "0" : endNs.toString(),
-    startMs: nsToExactMs(startNs === null ? "0" : startNs.toString()),
-    endMs: nsToExactMs(endNs === null ? "0" : endNs.toString()),
+    startNs: startNsText,
+    endNs: endNsText,
+    startMs,
+    endMs,
     eventCount: session.eventCount,
     unresolvedCount: events.filter((event) => event.unresolved).length,
     events,
     lanes,
-    viewSpans,
+    viewSpans: spans,
+    rowCount,
     snapshots: session.snapshots.map((snapshot, index) => ({
       index,
       ns: snapshot.timestampNs.toString(),

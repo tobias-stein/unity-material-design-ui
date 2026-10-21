@@ -57,6 +57,19 @@ namespace mdu.ui.telemetry
         }
 
         /// <summary>
+        /// Editor play-mode exit hook: closes the open view spans, writes the
+        /// session end point and persists every buffered event to disk.
+        /// <see cref="Application.quitting"/> does not fire when play mode
+        /// ends in the editor, so without this the sink's in-memory batch is
+        /// either lost to the domain reload or stranded until the next play.
+        /// No-op when telemetry never bootstrapped.
+        /// </summary>
+        public static void endSessionForPlayModeExit()
+        {
+            _eventCollector?.endForExit();
+        }
+
+        /// <summary>
         /// Mutates the effective configuration (merged over asset/defaults).
         /// Example: <c>Telemetry.configure(cfg => cfg.maxFiles = 20);</c>
         /// </summary>

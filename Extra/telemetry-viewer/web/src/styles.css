@@ -156,16 +156,17 @@ input[type="date"] { color-scheme: dark; }
 
 /* Full-height workspace: the canvas belongs to the viewport, not the page. */
 body.timeline-open { overflow: hidden; }
+
+/* Vertical workspace (2026-10-20): timeline strip on top, big UI replica
+   below. The replica panel takes every remaining pixel of the page, which
+   sizes the replica stage up (fitReplica scales to the viewport box). */
 .timeline-layout {
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   padding: 12px 18px 8px;
   min-height: 0;
-}
-@media (max-width: 1100px) {
-  .timeline-layout { grid-template-columns: minmax(0, 1fr); }
 }
 
 .session-title { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
@@ -174,15 +175,15 @@ body.timeline-open { overflow: hidden; }
 .snap-chip { color: var(--primary); font-weight: 600; margin-left: 4px; }
 
 .timeline-left {
+  flex: none; /* strip height is the canvas content height (set by the view) */
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
 }
 .canvas-wrap {
-  flex: 1;
+  flex: none;
   position: relative;
-  min-height: 320px;
   /* dense NLE look behind the canvas rows */
   background: #0e1116;
 }
@@ -197,6 +198,7 @@ body.timeline-open { overflow: hidden; }
 /* ------------------------------------------------------------ replica panel */
 
 .replica-panel {
+  flex: 1; /* the page area below the timeline strip — replica lives large */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -273,9 +275,51 @@ body.timeline-open { overflow: hidden; }
   position: relative;
   flex: none;
   transform-origin: top center;
+  /* auto margins win the free-space distribution: centering never clips the
+     left/top of a zoomed-in stage (justify-content center would). */
+  margin: auto;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
+
+/* Composite replica (2026-10-21): one wrapper, one stage per canvas layer.
+   The wrapper owns the zoom (CSS zoom cascades, overlay positions ride
+   along); overlay stages sit absolutely on the base stage. */
+.replica-composite {
+  position: relative;
+  flex: none;
+  margin: auto;
+}
+.replica-composite .replica-stage { margin: 0; }
+.replica-composite .replica-stage.overlay-stage {
+  position: absolute;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+/* Tool chrome: small view·layer chip on each overlay stage + outline of the
+   focused layer (filmstrip clicks / follow-selection). */
+.replica-layer-chip {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 5;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(208, 188, 255, 0.35);
+  background: rgba(8, 10, 14, 0.72);
+  color: #dde2ea;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.replica-stage.layer-focused {
+  outline: 2px solid rgba(253, 214, 99, 0.85);
+  outline-offset: 0;
+}
+#tl-replica-viewport { cursor: grab; }
+#tl-replica-viewport:active { cursor: grabbing; }
+
+.replica-zoom { display: flex; align-items: center; gap: 8px; }
+.zoom-level { font-family: var(--mono); color: var(--text-dim); font-size: 11px; min-width: 44px; text-align: right; }
 .replica-empty {
   position: absolute;
   inset: 0;
@@ -399,6 +443,21 @@ body.timeline-open { overflow: hidden; }
 .heat-overlay.selected {
   outline: 2px dashed #ffd600;
   outline-offset: -2px;
+  z-index: 3;
+}
+
+/* Timeline selection (§9.1): the event under the playhead gets its element
+   outlined inside the replica — heavy marker so it reads at a glance even on
+   small elements: a yellow tint wash + thick outward outline + glow. */
+.event-node-highlight {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(255, 214, 0, 0.28);
+  outline: 3px solid #ffd600;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px rgba(255, 214, 0, 0.45), 0 0 24px 8px rgba(255, 214, 0, 0.55);
+  pointer-events: none;
   z-index: 3;
 }
 

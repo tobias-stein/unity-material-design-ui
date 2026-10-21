@@ -202,8 +202,24 @@ export async function renderAggregateView(app: HTMLElement): Promise<AggregateVi
     return {};
   }
 
+  /**
+   * The tab body lives inside #agg-result; error/loading renders used to wipe
+   * the whole panel (destroying it), which crashed the next renderResult with
+   * "Cannot set properties of null (setting 'innerHTML')". Always render into
+   * the preserved holder, recreating it if a previous render removed it.
+   */
+  function ensureTabBody(): HTMLDivElement {
+    let body = resultPanel.querySelector<HTMLDivElement>("#agg-tab-body");
+    if (body === null) {
+      body = document.createElement("div");
+      body.id = "agg-tab-body";
+      resultPanel.replaceChildren(body);
+    }
+    return body;
+  }
+
   async function fetchAndRender(query: AggregateQuery): Promise<void> {
-    resultPanel.innerHTML = `<div class="state-block loading">Aggregating…</div>`;
+    ensureTabBody().innerHTML = `<div class="state-block loading">Aggregating…</div>`;
     let response: AggregateResponse;
     try {
       response = await api.aggregate(query);
@@ -352,7 +368,7 @@ export async function renderAggregateView(app: HTMLElement): Promise<AggregateVi
   }
 
   function renderActiveTab(): void {
-    const body = app.querySelector<HTMLDivElement>("#agg-tab-body")!;
+    const body = ensureTabBody();
     body.innerHTML = "";
     app.querySelectorAll(".agg-tab").forEach((button, position) => {
       button.classList.toggle("active", position === activeViewIndex);
@@ -732,7 +748,7 @@ export async function renderAggregateView(app: HTMLElement): Promise<AggregateVi
   }
 
   function renderResultError(message: string, status: number | null): void {
-    resultPanel.innerHTML = `
+    ensureTabBody().innerHTML = `
       <div class="state-block ${status === null || status >= 500 ? "err" : "warn"}">
         <h2>Aggregate unavailable</h2>
         <p>${esc(message)}</p>
