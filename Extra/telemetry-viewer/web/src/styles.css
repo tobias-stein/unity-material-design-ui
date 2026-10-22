@@ -283,7 +283,12 @@ body.timeline-open { overflow: hidden; }
      left/top of a zoomed-in stage (justify-content center would). */
   margin: auto;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  overflow: hidden;
+  /* Popup roots may be zero-sized RectTransforms (Snackbar: bottom-anchor,
+     sizeDelta 0×48). Unity never clips children into the parent rect, so a
+     captured popup's paint lives outside the root rect — any stage must
+     therefore let its captured nodes paint beyond it (2026-10-22). Holders
+     provide the scroll/clip bounds, the stage itself never clips. */
+  overflow: visible;
 }
 
 /* Composite replica (2026-10-21): one wrapper, one stage per canvas layer.
@@ -298,11 +303,6 @@ body.timeline-open { overflow: hidden; }
 .replica-composite .replica-stage.overlay-stage {
   position: absolute;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  /* Popup roots may be zero-sized RectTransforms (Snackbar: bottom-anchor,
-     sizeDelta 0×48). Unity never clips children into the parent rect, so the
-     captured pill paints outside the root — an overlay stage must therefore
-     not clip its captured nodes to the root rect. */
-  overflow: visible;
 }
 /* Tool chrome: small view·layer chip on each overlay stage + outline of the
    focused layer (filmstrip clicks / follow-selection). */
