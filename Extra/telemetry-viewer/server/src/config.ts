@@ -19,6 +19,8 @@ export interface ToolConfig {
   snapshotRoot: string | null;
   /** TTL cache for `/api/aggregate` responses (0 disables; requests coalesce). */
   aggregateCacheMs: number;
+  /** TTL cache for the session catalog (0 disables; requests re-build fresh). */
+  catalogCacheMs: number;
   /** Absolute path of the built web client (served statically). */
   webDist: string | null;
   port: number;
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ToolConfig {
     lpRoot: nullIfEmpty(env.LP_ROOT),
     snapshotRoot: nullIfEmpty(env.SNAPSHOT_ROOT),
     aggregateCacheMs: nonNegativeInt(env.AGGREGATE_CACHE_MS) ?? 15_000,
+    catalogCacheMs: nonNegativeInt(env.CATALOG_CACHE_MS) ?? 1_000,
     webDist,
     port: positiveInt(env.PORT) ?? 8087,
     host: env.HOST?.trim() || "0.0.0.0",

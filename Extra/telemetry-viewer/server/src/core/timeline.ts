@@ -52,6 +52,11 @@ export interface TimelineFrame {
   endNs: string;
   startMs: number;
   endMs: number;
+  /** True only when the runtime delivered a real `session type=end` point
+   *  (endNs above is that event's timestamp, not the last event's). The web
+   *  client's live poll stops and removes its LIVE badge on this. */
+  sessionEnded: boolean;
+
   /** ui_event count — **equals `<Session>` eventCount exactly** (invariance tested). */
   eventCount: number;
   unresolvedCount: number;
@@ -253,6 +258,7 @@ export function buildTimelineFrame(session: Session, sessionEvents: readonly Raw
     endNs: endNsText,
     startMs,
     endMs,
+    sessionEnded: session.endNs !== null,
     eventCount: session.eventCount,
     unresolvedCount: events.filter((event) => event.unresolved).length,
     events,

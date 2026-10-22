@@ -115,7 +115,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const providers = options.providers ?? (() => runtime.providers());
   let snapshotStore = new LocalFsSnapshotStore(runtime.snapshotRoot.root);
   const snapshotService = new SnapshotService(snapshotStore);
-  const cacheMs = options.catalogCacheMs ?? 5_000;
+  const cacheMs = options.catalogCacheMs ?? config.catalogCacheMs;
   const aggregateCacheMs = options.aggregateCacheMs ?? config.aggregateCacheMs;
   const spaIndexFile = await resolveSpaIndex(app, config);
 
@@ -468,7 +468,18 @@ async function resolveSpaIndex(app: FastifyInstance, config: ToolConfig): Promis
     return null;
   }
   await app.register(fastifyStatic, { root: path.resolve(webDist), wildcard: false, index: false });
-  app.get("/", { logLevel: "error" }, (_request, reply: FastifyReply) => reply.type("text/html").send(indexFile));
+  app.get(
+    "/",
+    { logLevel: "error" },
+    (_request, reply: FastifyReply) =>
+      // no-cache: index.html references a content-hashed bundle — a cached
+      // index would keep a rebuilt server's UI stale (e.g. a missing new panel
+      // after a container rebuild).
+      reply
+        .headers({ "cache-control": "no-cache" })
+        .type("text/html")
+        .send(indexFile),
+  );
   return indexFile;
 }
 
@@ -570,6 +581,8 @@ export interface TimelineDto {
   endNs: string;
   startMs: number;
   endMs: number;
+  /** Runtime end marker seen (session type=end) — session lifecycle closed. */
+  sessionEnded: boolean;
   eventCount: number;
   unresolvedCount: number;
   lanes: Array<{ lane: string; label: string; count: number }>;
@@ -612,6 +625,7 @@ export function toTimelineDto(_catalogResult: SessionCatalog, frame: TimelineFra
     endNs: frame.endNs,
     startMs: frame.startMs,
     endMs: frame.endMs,
+    sessionEnded: frame.sessionEnded,
     eventCount: frame.eventCount,
     unresolvedCount: frame.unresolvedCount,
     lanes: frame.lanes,
