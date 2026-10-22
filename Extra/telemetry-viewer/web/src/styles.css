@@ -65,6 +65,18 @@ html, body {
 .pill.warn { color: var(--warn); border-color: #4a3a2f; background: #201a13; }
 .pill.err  { color: var(--err);  border-color: #4a2f2f; background: #201313; }
 .pill.info { color: var(--primary); border-color: #2f4450; background: #101c23; }
+.pill.live { color: var(--ok); border-color: #2f4a33; background: #132015; display: inline-flex; align-items: center; gap: 5px; }
+.pill.live .dot {
+  width: 7px; height: 7px; border-radius: 999px;
+  background: var(--ok);
+  animation: live-pulse 1.2s ease-in-out infinite;
+}
+.pill.live.syncing { color: var(--text-dim); border-color: var(--border); background: var(--bg-field); }
+.pill.live.syncing .dot { background: var(--text-dim); animation-duration: 0.6s; }
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.55); }
+  50% { opacity: 0.45; box-shadow: 0 0 0 4px rgba(63, 185, 80, 0); }
+}
 .hint { color: var(--text-dim); font-size: 12px; }
 
 .layout { padding: 18px 22px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
@@ -145,13 +157,6 @@ input[type="date"] { color-scheme: dark; }
 
 .table-hint { padding: 10px 16px; color: var(--text-dim); font-size: 12px; border-top: 1px solid var(--border); }
 
-.hints {
-  padding: 12px 22px 20px;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-.hints code { font-family: var(--mono); color: #a9bacb; }
-
 /* ------------------------------------------------------------------ P2 timeline */
 
 /* Full-height workspace: the canvas belongs to the viewport, not the page. */
@@ -196,7 +201,7 @@ body.timeline-open { overflow: hidden; }
 }
 /* Event transport (the "player"): centered above the strip, styled like the
    replica-zoom pill (shared .segmented control). */
-.canvas-toolbar { display: flex; justify-content: center; padding: 6px 0 8px; }
+.canvas-toolbar { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 0 8px; }
 .segmented button:disabled { opacity: 0.35; cursor: default; }
 
 /* ------------------------------------------------------------ replica panel */

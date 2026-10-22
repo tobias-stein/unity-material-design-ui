@@ -812,9 +812,6 @@ function shell(app: HTMLElement): void {
       <div class="agg-tabs" id="agg-view-tabs"></div>
       <section id="agg-result" class="panel"><div class="state-block muted" id="agg-tab-body"></div></section>
     </main>
-    <footer class="hints">
-      <span>Counts use canonical element keys (tree paths) — identical elements in different sessions sum together. The replica always renders the default-light theme; captured themes are ignored. Version modes: A common-only → B version split → C ground-truth merge (pick a group in B; exiting keeps the pick).</span>
-    </footer>
   `;
 }
 

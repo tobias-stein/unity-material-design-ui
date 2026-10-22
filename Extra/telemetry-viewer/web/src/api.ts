@@ -164,6 +164,8 @@ export interface TimelineResponse {
   endNs: string;
   startMs: number;
   endMs: number;
+  /** Runtime end marker seen (session type=end) — the live poll stops on it. */
+  sessionEnded: boolean;
   eventCount: number;
   unresolvedCount: number;
   lanes: TimelineLaneDto[];

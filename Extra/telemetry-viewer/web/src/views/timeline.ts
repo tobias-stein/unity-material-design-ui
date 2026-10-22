@@ -119,7 +119,6 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   const wrap = app.querySelector<HTMLDivElement>("#tl-wrap")!;
   const canvas = app.querySelector<HTMLCanvasElement>("#tl-canvas")!;
   const ctx = canvas.getContext("2d")!;
-  const fpsEl = app.querySelector<HTMLSpanElement>("#tl-fps")!;
   const themeToggle = app.querySelector<HTMLDivElement>("#tl-theme-toggle")!;
   const replicaHolder = app.querySelector<HTMLDivElement>("#tl-replica-holder")!;
   const replicaViewport = app.querySelector<HTMLDivElement>("#tl-replica-viewport")!;
@@ -184,53 +183,170 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     anchors: TimelineSnapshotDto[];
   }
 
-  const { startMs: frameStart, endMs: frameEnd } = timeline;
-  const spanById = new Map<number, TimelineViewSpanDto>();
-  for (const span of timeline.viewSpans) spanById.set(span.index, span);
+  /* ----------------------------------------------------------- derived state */
 
-  const rowSpans = new Map<number, RowSpan[]>();
-  for (const span of timeline.viewSpans) {
-    const row = Math.max(span.row, 0);
-    let list = rowSpans.get(row);
-    if (list === undefined) {
-      list = [];
-      rowSpans.set(row, list);
-    }
-    list.push({ span, events: [], anchors: [] });
-  }
-  for (const list of rowSpans.values()) {
-    list.sort((a, b) => a.span.openMs - b.span.openMs);
-  }
-  const rowCount = Math.max(
-    timeline.rowCount,
-    ...[...rowSpans.keys()].map((row) => row + 1),
-  );
-  const NO_VIEW_ROW = rowCount; // pseudo row after the real tracks
+  /**
+   * Everything below re-derives from the TimelineResponse and rebuilds on each
+   * live poll (`rebuildModel`); interactive state — viewport window, playhead,
+   * selection, focus, replica/minimap caches — carries across polls.
+   */
+  let spanById = new Map<number, TimelineViewSpanDto>();
+  let rowSpans = new Map<number, RowSpan[]>();
+  let rowCount = 0;
+  let NO_VIEW_ROW = 0;
+  let rowOfSpanId = new Map<number, number>();
+  let orphanEvents: TimelineEventDto[] = [];
+  let orphanCount = 0;
+  let totalRows = 0;
+  let visibleRowsH = 0;
+  let canvasH = RULER_H;
+  let maxScrollY = 0;
+  let frameStart = 0;
+  let frameEnd = 1;
+  /** Viewport frame in session-ms (padded [lo0, hi0]); rebuilt per poll. */
+  let T0 = 0;
+  let T1 = 1;
+  let lo0 = 0;
+  let hi0 = 1;
+  let viewStart = 0;
+  let viewEnd = 1;
+  /** Playhead + the event it snaps to (closest-event invariant, see setPlayheadMs). */
+  let playheadMs = 0;
+  let selectedEventIndex = -1;
+  let scrollY = 0;
+  /** Dirty flag for the rAF-drawn canvas (shared with the drawing loop below). */
+  let dirty = true;
+  /** Set after the first rebuildModel — gates live-carry logic against the
+   *  placeholder viewport state the initial call runs under. */
+  let modelBuilt = false;
 
-  const rowOfSpanId = new Map<number, number>();
-  for (const span of timeline.viewSpans) rowOfSpanId.set(span.index, Math.max(span.row, 0));
+  /** Which span should the replica focus ("follow selection"); null = global fallback. */
+  let focusedSpanId: number | null = null;
 
-  // Events → spans (spanId from the server; legacy frames without rows keep
-  // everything on the no-view row).
-  const orphanEvents: TimelineEventDto[] = [];
-  for (const event of timeline.events) {
-    if (event.spanId === null && event.viewId === null) {
-      orphanEvents.push(event);
-      continue;
+  /** Poll-stable span identity: view + open time (span indexes are append-only
+   *  but rows are re-packed server-side; focus survives any re-packing). */
+  const spanIdentity = (span: TimelineViewSpanDto): string => `${span.viewId}\u0000${span.openMs}`;
+
+  /** Rebuild every derived construct from a fresh timeline response. */
+  function rebuildModel(next: TimelineResponse): void {
+    // Carry interactive state first (old frame geometry still applies here).
+    const pinnedRight = modelBuilt && viewEnd + 1e-6 >= hi0; // parked at the session right edge
+    const focused = focusedSpanId === null
+      ? null
+      : timeline.viewSpans.find((span) => span.index === focusedSpanId) ?? null;
+    const focusedIdentity = focused !== null ? spanIdentity(focused) : null;
+
+    timeline = next;
+    frameStart = next.startMs;
+    frameEnd = next.endMs;
+
+    spanById = new Map();
+    rowSpans = new Map();
+    rowOfSpanId = new Map();
+    for (const span of next.viewSpans) {
+      spanById.set(span.index, span);
+      const row = Math.max(span.row, 0);
+      let list = rowSpans.get(row);
+      if (list === undefined) {
+        list = [];
+        rowSpans.set(row, list);
+      }
+      list.push({ span, events: [], anchors: [] });
+      rowOfSpanId.set(span.index, row);
     }
-    const spanId =
-      event.spanId ?? nearestSpanIdFor(event.viewId, event.ms);
-    if (spanId === null) {
-      orphanEvents.push(event);
-      continue;
+    for (const list of rowSpans.values()) {
+      list.sort((a, b) => a.span.openMs - b.span.openMs);
     }
-    const span = spanById.get(spanId);
-    if (span === undefined) {
-      orphanEvents.push(event);
-      continue;
+    rowCount = Math.max(next.rowCount, ...[...rowSpans.keys()].map((row) => row + 1), 0);
+    NO_VIEW_ROW = rowCount; // pseudo row after the real tracks
+
+    // Events → spans (spanId from the server; legacy events without rows keep
+    // everything on the no-view row).
+    orphanEvents = [];
+    for (const event of next.events) {
+      if (event.spanId === null && event.viewId === null) {
+        orphanEvents.push(event);
+        continue;
+      }
+      const spanId = event.spanId ?? nearestSpanIdFor(event.viewId, event.ms);
+      if (spanId === null) {
+        orphanEvents.push(event);
+        continue;
+      }
+      const span = spanById.get(spanId);
+      if (span === undefined) {
+        orphanEvents.push(event);
+        continue;
+      }
+      rowSpans.get(Math.max(span.row, 0))!.find((entry) => entry.span === span)!.events.push(event);
     }
-    rowSpans.get(Math.max(span.row, 0))!.find((entry) => entry.span === span)!.events.push(event);
+
+    // Snapshot anchors grouped per view_id, then scoped into their span windows.
+    const anchorsByViewId = new Map<string, TimelineSnapshotDto[]>();
+    for (const anchor of next.snapshots) {
+      if (anchor.viewId === null) continue;
+      let list = anchorsByViewId.get(anchor.viewId);
+      if (list === undefined) {
+        list = [];
+        anchorsByViewId.set(anchor.viewId, list);
+      }
+      list.push(anchor);
+    }
+    for (const list of anchorsByViewId.values()) {
+      list.sort((a, b) => a.ms - b.ms);
+    }
+    for (const list of rowSpans.values()) {
+      for (const entry of list) {
+        const viewId = entry.span.viewId;
+        const anchors = viewId !== null ? anchorsByViewId.get(viewId) ?? [] : [];
+        entry.anchors = anchors.filter(
+          (anchor) =>
+            anchor.ms >= entry.span.openMs - 1e-9 &&
+            anchor.ms <= (entry.span.closeMs ?? frameEnd) + 1e-9,
+        );
+      }
+    }
+
+    // Viewport frame: full session ± 2% (≥50 ms) padding — as before.
+    T0 = next.startMs;
+    T1 = Math.max(next.endMs, next.startMs);
+    const pad = Math.max(50, (T1 - T0) * 0.02);
+    lo0 = T0 - pad;
+    hi0 = T1 + pad;
+
+    orphanCount = orphanEvents.length;
+    totalRows = rowCount + (orphanCount > 0 ? 1 : 0);
+    const visibleRows = Math.min(totalRows, MAX_VISIBLE_ROWS);
+    visibleRowsH = visibleRows * ROW_H;
+    canvasH = RULER_H + visibleRowsH; // rows live below the pinned ruler
+    maxScrollY = Math.max(0, totalRows * ROW_H - visibleRowsH);
+    // The canvas is absolutely positioned; keep the wrap's explicit height current.
+    wrap.style.height = `${canvasH}px`;
+
+    // Focus follows the span identity, not the (possibly re-packed) index.
+    if (focusedIdentity !== null) {
+      focusedSpanId = next.viewSpans.find((span) => spanIdentity(span) === focusedIdentity)?.index ?? null;
+    }
+
+    // Live-follow: the right edge pinned to the old session end keeps tracking
+    // "now"; a zoomed/scrolled window stays exactly where the user put it.
+    if (pinnedRight && viewEnd > viewStart) {
+      const span = viewEnd - viewStart;
+      viewStart = hi0 - span;
+      viewEnd = hi0;
+    }
+
+    // Selection invariant re-check: the playhead still snaps to the closest
+    // event (it may have a new neighbour; ms-stable, never jumps otherwise).
+    selectedEventIndex = closestEventIndex(playheadMs);
+    if (selectedEventIndex !== -1) playheadMs = timeline.events[selectedEventIndex]!.ms;
+
+    scrollY = clampScrollY(scrollY);
+    updateTransport();
+    dirty = true;
+    modelBuilt = true;
   }
+
 
   /** Latest span of a view at-or-before t (client fallback for legacy events without spanId). */
   function nearestSpanIdFor(viewId: string | null, tMs: number): number | null {
@@ -253,67 +369,18 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     return best?.index ?? null;
   }
 
-  // Snapshot anchors grouped per view_id (span filmstrip blocks).
-  const anchorsByViewId = new Map<string, TimelineSnapshotDto[]>();
-  for (const anchor of timeline.snapshots) {
-    if (anchor.viewId === null) continue;
-    let list = anchorsByViewId.get(anchor.viewId);
-    if (list === undefined) {
-      list = [];
-      anchorsByViewId.set(anchor.viewId, list);
-    }
-    list.push(anchor);
-  }
-  for (const list of anchorsByViewId.values()) {
-    list.sort((a, b) => a.ms - b.ms);
-  }
-  for (const list of rowSpans.values()) {
-    for (const entry of list) {
-      const viewId = entry.span.viewId;
-      const anchors = viewId !== null ? anchorsByViewId.get(viewId) ?? [] : [];
-      entry.anchors = anchors.filter(
-        (anchor) =>
-          anchor.ms >= entry.span.openMs - 1e-9 &&
-          anchor.ms <= (entry.span.closeMs ?? frameEnd) + 1e-9,
-      );
-    }
-  }
-
-  /** Which span should the replica focus ("follow selection"); null = global fallback. */
-  let focusedSpanId: number | null = null;
-
   /* ------------------------------------------------------- canvas geometry */
 
-  const T0 = timeline.startMs;
-  const T1 = Math.max(timeline.endMs, timeline.startMs);
-  const pad = Math.max(50, (T1 - T0) * 0.02);
-  const lo0 = T0 - pad;
-  const hi0 = T1 + pad;
+  rebuildModel(timeline);
 
-  let viewStart = lo0;
-  let viewEnd = hi0;
-  let playheadMs = timeline.snapshots.length > 0 ? (timeline.snapshots[0]?.ms ?? T0) : T0;
-  // Selection invariant: the playhead always coincides with the temporally
-  // nearest event (see setPlayheadMs); -1 only while the session has no
-  // events at all (free placement stays possible there).
-  let selectedEventIndex = closestEventIndex(playheadMs);
+  // Initial viewport: full session window, playhead on the first snapshot
+  // (falling back to unscoped t0) snapped to its closest event.
+  viewStart = lo0;
+  viewEnd = hi0;
+  playheadMs = timeline.snapshots.length > 0 ? (timeline.snapshots[0]?.ms ?? T0) : T0;
+  selectedEventIndex = closestEventIndex(playheadMs);
   if (selectedEventIndex !== -1) playheadMs = timeline.events[selectedEventIndex]!.ms;
-
-  const orphanCount = orphanEvents.length;
-  const totalRows = rowCount + (orphanCount > 0 ? 1 : 0);
-  const visibleRows = Math.min(totalRows, MAX_VISIBLE_ROWS);
-  const visibleRowsH = visibleRows * ROW_H;
-  const laneBottom = RULER_H; // rows live below the pinned ruler
-  const canvasH = laneBottom + visibleRowsH;
-
-  // Vertical workspace: the timeline strip is exactly the canvas content
-  // height; the replica panel below takes the rest of the page. The canvas
-  // is absolutely positioned, so the wrap gets an explicit height here.
-  wrap.style.height = `${canvasH}px`;
-
-  /** Vertical scroll (rows beyond the viewport); drawn-state, clamped. */
-  let scrollY = 0;
-  const maxScrollY = Math.max(0, totalRows * ROW_H - visibleRowsH);
+  scrollY = 0;
   function clampScrollY(value: number): number {
     return Math.min(Math.max(value, 0), maxScrollY);
   }
@@ -782,7 +849,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
 
   /* --------------------------------------------------------------- drawing */
 
-  let dirty = true;
+  // `dirty` is declared with the derived model state above (rebuildModel sets it).
   let raf = 0;
   let dpr = Math.max(window.devicePixelRatio || 1, 1);
 
@@ -1083,25 +1150,13 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     drawPlayhead(ctx);
   }
 
-  let frames = 0;
-  let fpsWindowStart = performance.now();
-
   function frame(): void {
     if (destroyed) return;
     raf = requestAnimationFrame(frame);
     if (!dirty) return;
     resizeCanvas();
-    const started = performance.now();
     draw();
     dirty = false;
-    frames += 1;
-    const now = performance.now();
-    if (now - fpsWindowStart >= 500) {
-      const fps = (frames * 1000) / (now - fpsWindowStart);
-      fpsEl.textContent = `${Math.round(fps)} fps · draw ${(now - started).toFixed(1)} ms`;
-      frames = 0;
-      fpsWindowStart = now;
-    }
   }
 
   /* ---------------------------------------------------------- interactions */
@@ -1503,8 +1558,144 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
   updateTransport();
 
+  /* ------------------------------------------------------------- auto-scroll */
+
+  /**
+   * Auto-scroll (2026-10-22): while the session is live, each poll that brings
+   * new events places the playhead on the newest event and keeps the window's
+   * right edge pinned to "now" (the user's zoom span is preserved). The
+   * toggle exists only while the session is live — it disables itself the
+   * moment the runtime's end marker arrives.
+   */
+  const autostepWrap = app.querySelector<HTMLDivElement>("#tl-autostep")!;
+  const autostepBtn = app.querySelector<HTMLButtonElement>("#tl-autostep-btn")!;
+  let autoStep = false;
+
+  /** Jump to the newest event, viewport glued to the session's right edge. */
+  const applyAutoStep = (): void => {
+    if (!autoStep || timeline.events.length === 0) return;
+    const span = Math.max(viewEnd - viewStart, MIN_VISIBLE_MS);
+    viewEnd = hi0;
+    viewStart = Math.max(lo0, hi0 - span);
+    gotoEvent(timeline.events.length - 1);
+  };
+
+  /** Only a running session offers auto-scroll: finished sessions don't
+   *  receive new events, so the control is removed from the toolbar. */
+  const hideAutoStep = (): void => {
+    autoStep = false;
+    autostepWrap.classList.add("hidden");
+  };
+
+  autostepBtn.addEventListener("click", () => {
+    autoStep = !autoStep;
+    autostepBtn.classList.toggle("active", autoStep);
+    if (autoStep) applyAutoStep();
+  });
+
+  const showAutoStep = (): void => {
+    autostepWrap.classList.remove("hidden");
+  };
+
+  if (timeline.sessionEnded) {
+    hideAutoStep();
+  } else {
+    showAutoStep();
+  }
+
+
   syncReplica();
   raf = requestAnimationFrame(frame);
+
+  /* ------------------------------------------------------------------- live */
+
+  /**
+   * Live session tracking (2026-10-22): while the runtime session is still
+   * open (no `session type=end` point yet), the timeline re-fetches every
+   * second and rebuilds in place — the LIVE pill in the topbar pulses while
+   * it tracks. The poll stops itself on the first response that reports the
+   * session ended (final rebuild renders the closed session), and the view's
+   * destroy() tears the timer down on navigation.
+   */
+  const LIVE_POLL_MS = 1000;
+  /** Legacy sessions can lack a `session type=end` point entirely (old runtimes,
+   *  undelivered end markers) — without a staleness guard those would poll at
+   *  1s forever. After 2 min of no new events the cadence drops to 10s and the
+   *  badge goes idle; the poll still ends the moment the end marker appears. */
+  const LIVE_STALE_MS = 120_000;
+  const LIVE_IDLE_POLL_MS = 10_000;
+
+  const liveBadge = app.querySelector<HTMLSpanElement>("#tl-live")!;
+  const liveLabel = app.querySelector<HTMLSpanElement>("#tl-live-label")!;
+
+  let liveTimer = 0;
+  let livePollMs = LIVE_POLL_MS;
+  let liveInFlight = false;
+  let liveErrors = 0;
+
+  const stopLivePoll = (): void => {
+    if (liveTimer !== 0) {
+      window.clearInterval(liveTimer);
+      liveTimer = 0;
+    }
+    liveBadge.classList.add("hidden");
+  };
+
+  const restartLiveTimer = (ms: number): void => {
+    if (ms === livePollMs) return;
+    livePollMs = ms;
+    window.clearInterval(liveTimer);
+    liveTimer = window.setInterval(livePoll, ms);
+  };
+
+  const livePoll = (): void => {
+    if (liveInFlight || destroyed) return;
+    liveInFlight = true;
+    api
+      .timeline(sessionId)
+      .then((next) => {
+        liveErrors = 0;
+        liveBadge.classList.remove("syncing");
+        if (next.sessionEnded) {
+          // Session closed — final static render, badge gone, poll stops.
+          stopLivePoll();
+          rebuildModel(next);
+          syncReplica();
+          hideAutoStep();
+          return;
+        }
+        if (Date.now() - next.endMs > LIVE_STALE_MS) {
+          // No end marker yet, but nothing new for a while: idle cadence.
+          restartLiveTimer(LIVE_IDLE_POLL_MS);
+          liveBadge.classList.add("syncing");
+          liveLabel.textContent = `live · idle (last event ${Math.round((Date.now() - next.endMs) / 1000)}s ago)`;
+        } else {
+          restartLiveTimer(LIVE_POLL_MS);
+          liveLabel.textContent = "live";
+        }
+        rebuildModel(next);
+        syncReplica();
+        applyAutoStep();
+      })
+      .catch(() => {
+        // Keep polling: a lagging server/catalog or a stale Influx connection
+        // recovers; the badge shows the degraded (reconnecting) state.
+        liveErrors++;
+        liveBadge.classList.add("syncing");
+        liveLabel.textContent = liveErrors >= 3 ? `live · reconnecting (×${liveErrors})` : "live";
+      })
+      .finally(() => {
+        liveInFlight = false;
+      });
+  };
+
+  if (!timeline.sessionEnded) {
+    liveLabel.textContent = "live";
+    liveBadge.classList.remove("hidden");
+    livePollMs = LIVE_POLL_MS;
+    liveTimer = window.setInterval(livePoll, LIVE_POLL_MS);
+  }
+
 
   const resizeObserver = new ResizeObserver(() => {
     dirty = true;
@@ -1524,6 +1715,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   return {
     destroy() {
       destroyed = true;
+      window.clearInterval(liveTimer);
       document.body.classList.remove("timeline-open");
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
@@ -1548,6 +1740,9 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
         <span class="pill info">${timeline.snapshots.length} snapshots</span>
         <span class="pill ${timeline.unresolvedCount > 0 ? "warn" : "ok"}">${timeline.unresolvedCount} unresolved</span>
         <span class="hint">${escapeHtml(metaLine(session))}</span>
+        <span class="pill live hidden" id="tl-live" title="session is still running — auto-refreshing every 1s">
+          <span class="dot" aria-hidden="true"></span><span id="tl-live-label">live</span>
+        </span>
       </div>
     </header>
     <main class="timeline-layout">
@@ -1558,6 +1753,9 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
             <button type="button" id="tl-prev" title="previous event (←)">&lt;</button>
             <button type="button" id="tl-next" title="next event (→)">&gt;</button>
             <button type="button" id="tl-last" title="go to last event (End)">&gt;&gt;</button>
+          </div>
+          <div class="segmented hidden" id="tl-autostep" role="group" aria-label="Auto-scroll">
+            <button type="button" id="tl-autostep-btn" title="auto-scroll: follow the newest event while the session is live">⏩ auto-scroll</button>
           </div>
         </div>
         <div class="canvas-wrap" id="tl-wrap">
@@ -1590,11 +1788,7 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
         <div class="replica-footer" id="tl-replica-footer"></div>
       </aside>
     </main>
-    <footer class="hints">
-      <span>wheel scrolls tracks (more than 3) / zooms · shift+wheel pan · ctrl+wheel/pinch zoom · drag pan · click sets playhead · click a clip snaps its capture · drag ruler handle scrubs · ←/→ events · PgUp/PgDn snapshots · Home/End · dbl-click fit · replica: wheel zooms · drag pans</span>
-      <span class="hint" id="tl-fps"></span>
-    </footer>
-  `;
+`;
 }
 
 function metaLine(session: TimelineResponse["session"]): string {

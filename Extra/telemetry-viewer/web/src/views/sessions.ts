@@ -84,9 +84,6 @@ export function renderSessionsView(app: HTMLElement): SessionsView {
         <div id="session-state"></div>
       </section>
     </main>
-    <footer class="hints">
-      <span>Sessions come from the ledger (InfluxDB or <code>.lp</code> files) — owner info rides the <code>ui_snapshot_taken</code> points. Click a session for its timeline. Use <em>Sources ⚙</em> to switch sources, re-scan or import files — all live, no restart.</span>
-    </footer>
   `;
 
   const qInput = app.querySelector<HTMLInputElement>("#filter-q")!;
