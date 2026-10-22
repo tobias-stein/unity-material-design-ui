@@ -194,6 +194,10 @@ body.timeline-open { overflow: hidden; }
   cursor: default;
   touch-action: none; /* pinch/pan gestures belong to us */
 }
+/* Event transport (the "player"): centered above the strip, styled like the
+   replica-zoom pill (shared .segmented control). */
+.canvas-toolbar { display: flex; justify-content: center; padding: 6px 0 8px; }
+.segmented button:disabled { opacity: 0.35; cursor: default; }
 
 /* ------------------------------------------------------------ replica panel */
 

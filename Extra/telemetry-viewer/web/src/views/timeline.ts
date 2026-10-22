@@ -132,6 +132,10 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   const zoomFitBtn = app.querySelector<HTMLButtonElement>("#tl-zoom-fit")!;
   const zoom11Btn = app.querySelector<HTMLButtonElement>("#tl-zoom-11")!;
   const zoomLevel = app.querySelector<HTMLSpanElement>("#tl-zoom-level")!;
+  const transportFirst = app.querySelector<HTMLButtonElement>("#tl-first")!;
+  const transportPrev = app.querySelector<HTMLButtonElement>("#tl-prev")!;
+  const transportNext = app.querySelector<HTMLButtonElement>("#tl-next")!;
+  const transportLast = app.querySelector<HTMLButtonElement>("#tl-last")!;
 
   // The replica owns its zoom/pan now (user request 2026-10-20): wheel over
   // it zooms (multiplying the fit scale), drag pans the zoomed stage, a
@@ -976,29 +980,6 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     }
   }
 
-  /** Selection ring: bold circle around the selected event's marble. */
-  function drawSelection(ctx: CanvasRenderingContext2D, cssW: number): void {
-    const selection = selectedEventIndex !== -1 ? timeline.events[selectedEventIndex] : undefined;
-    if (selection === undefined) return;
-    const x = Math.round(pxAt(selection.ms)) + 0.5;
-    if (x < -14 || x > cssW + 14) return;
-    const row = rowOfEvent(selection);
-    const y = rowCenter(row);
-    if (y < RULER_H - 14 || y > canvasH + 14) return;
-    // Double stroke: wide translucent halo + crisp core — visible over
-    // marble and density-bar backgrounds alike.
-    ctx.strokeStyle = "rgba(253,214,99,0.35)";
-    ctx.lineWidth = 9;
-    ctx.beginPath();
-    ctx.arc(x, y, 12, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = "#fdd663";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(x, y, 12, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
   function drawRuler(ctx: CanvasRenderingContext2D, cssW: number): void {
     ctx.fillStyle = "#171b22";
     ctx.fillRect(0, 0, cssW, RULER_H);
@@ -1075,7 +1056,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
 
   /** Selection ring: bold circle around the selected event's marble. */
-  function drawPlayhead(ctx: CanvasRenderingContext2D, cssW: number): void {
+  function drawPlayhead(ctx: CanvasRenderingContext2D): void {
     const x = Math.round(pxAt(playheadMs)) + 0.5;
     ctx.strokeStyle = "#fdd663";
     ctx.lineWidth = 1;
@@ -1090,15 +1071,6 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     ctx.lineTo(x + HANDLE_HALF, RULER_H - 11);
     ctx.closePath();
     ctx.fill();
-    // readout chip
-    ctx.fillStyle = "rgba(253,214,99,0.14)";
-    roundRectPath(ctx, Math.min(x + 3, cssW - 96), 2, 94, RULER_H - 6, 5);
-    ctx.fill();
-    ctx.fillStyle = "#fdd663";
-    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.textBaseline = "middle";
-    ctx.fillText(fmtRel(playheadMs), Math.min(x + 8, cssW - 88), RULER_H / 2 - 1);
-    ctx.textBaseline = "top";
   }
 
   function draw(): void {
@@ -1108,8 +1080,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     drawRowClips(ctx, cssW);
     // Ruler + overlays pin above the (scrollable) rows.
     drawRuler(ctx, cssW);
-    drawPlayhead(ctx, cssW);
-    drawSelection(ctx, cssW);
+    drawPlayhead(ctx);
   }
 
   let frames = 0;
@@ -1354,6 +1325,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     }
     selectedEventIndex = index;
     playheadMs = snapped;
+    updateTransport();
     // Follow selection: the replica switches to the view of the selected
     // event — unless a filmstrip-block click just focused its span explicitly.
     if (index !== -1 && !focusedSpanWasJustClicked) {
@@ -1496,6 +1468,41 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   zoomFitBtn.addEventListener("click", () => setReplicaZoom(1));
   zoom11Btn.addEventListener("click", () => setReplicaZoom(1 / Math.max(replicaFitScale, 1e-6)));
 
+  /* ------------------------------------------------------- event transport */
+
+  /**
+   * The "event player" above the strip (2026-10-22): the ←/→/Home/End
+   * keyboard steps as centered buttons — every hop funnels through
+   * setPlayheadMs, so snapping, focus-follow and the replica stay in sync.
+   */
+  function gotoEvent(index: number): void {
+    const event = timeline.events[index];
+    if (event === undefined) return;
+    setPlayheadMs(event.ms);
+    reveal(event.ms);
+  }
+
+  transportFirst.addEventListener("click", () => gotoEvent(0));
+  transportLast.addEventListener("click", () => gotoEvent(timeline.events.length - 1));
+  transportPrev.addEventListener("click", () => {
+    const index = nearestEventIndex(-1);
+    if (index !== -1) gotoEvent(index);
+  });
+  transportNext.addEventListener("click", () => {
+    const index = nearestEventIndex(1);
+    if (index !== -1) gotoEvent(index);
+  });
+
+  /** Reflect the selection's position: nothing to step to ⇒ buttons disabled. */
+  function updateTransport(): void {
+    const hasEvents = timeline.events.length > 0;
+    transportFirst.disabled = !hasEvents;
+    transportLast.disabled = !hasEvents;
+    transportPrev.disabled = !hasEvents || nearestEventIndex(-1) === -1;
+    transportNext.disabled = !hasEvents || nearestEventIndex(1) === -1;
+  }
+  updateTransport();
+
   syncReplica();
   raf = requestAnimationFrame(frame);
 
@@ -1545,6 +1552,14 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
     </header>
     <main class="timeline-layout">
       <section class="timeline-left panel">
+        <div class="canvas-toolbar">
+          <div class="segmented" id="tl-transport" role="group" aria-label="Event transport">
+            <button type="button" id="tl-first" title="go to first event (Home)">&lt;&lt;</button>
+            <button type="button" id="tl-prev" title="previous event (←)">&lt;</button>
+            <button type="button" id="tl-next" title="next event (→)">&gt;</button>
+            <button type="button" id="tl-last" title="go to last event (End)">&gt;&gt;</button>
+          </div>
+        </div>
         <div class="canvas-wrap" id="tl-wrap">
           <canvas id="tl-canvas" aria-label="Session timeline canvas"></canvas>
         </div>
