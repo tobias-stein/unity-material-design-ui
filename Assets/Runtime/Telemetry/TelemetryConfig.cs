@@ -31,8 +31,11 @@ namespace mdu.ui.telemetry
 
         [Header("View transition trigger")]
         public bool viewTransitionEnabled = true;
-        [Tooltip("Minimum seconds between two automatic transition captures.")]
-        public float viewTransitionMinInterval = 5f;
+        [Tooltip("Minimum seconds between two automatic transition captures. 0 = no pacing " +
+                 "(every activation captures immediately). At >0 the minimum spacing still guarantees " +
+                 "every view cycle: activations paced out by the interval wait in a defer queue and " +
+                 "capture when it elapses instead of being dropped.")]
+        public float viewTransitionMinInterval = 1f;
         [Tooltip("Snap one capture per near-simultaneous duplicate raise of the same view (one capture per visibility cycle is always kept). The old cross-cycle 'view id + node count' dedupe is gone — pooled views re-open with the same id, which starved re-opened cycles and consecutive snackbars of their captures.")]
         public bool viewTransitionDedupe = true;
 
@@ -97,8 +100,9 @@ namespace mdu.ui.telemetry
         public string eventsSubfolder = "Telemetry/events";
         [Tooltip("Flush the event buffer once this many events are pending.")]
         public int eventFlushCount = 64;
-        [Tooltip("Flush the event buffer after this many seconds.")]
-        public float eventFlushInterval = 5f;
+        [Tooltip("Flush the event buffer after this many seconds. Lives 1s so the telemetry " +
+                 "viewer's live mode (1s poll) sees the session in near-realtime.")]
+        public float eventFlushInterval = 1f;
         [Tooltip("Delete oldest event files beyond this many (0 = unlimited). Safety cap for undelivered pending files.")]
         public int eventsMaxFiles = 100;
 

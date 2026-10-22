@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
@@ -20,6 +21,21 @@ namespace mdu.ui.telemetry.snapshot
         private bool _popupHooked;
         private bool _disabled;
         private float _lastCaptureTime = float.NegativeInfinity;
+        /// <summary>
+        /// Activations paced out by <see cref="TelemetryConfig.viewTransitionMinInterval"/>
+        /// queue here instead of being dropped and capture when the interval elapses
+        /// (see <see cref="processDeferredCaptures"/>) — the interval paces captures,
+        /// it never cancels one: every view cycle yields exactly one snapshot.
+        /// </summary>
+        private readonly Queue<DeferredCapture> _deferredCaptures = new();
+
+        private readonly struct DeferredCapture
+        {
+            public readonly IView View;
+            public readonly string Source;
+            public DeferredCapture(IView view, string source) { View = view; Source = source; }
+        }
+
         /// <summary>
         /// Near-simultaneous duplicate-raise guard (per view id). Replaces the old
         /// cross-cycle content dedupe (`view id + node count` vs. the last capture
@@ -62,6 +78,7 @@ namespace mdu.ui.telemetry.snapshot
 
             ensureViewHook();
             ensurePopupHook();
+            processDeferredCaptures(config);
 
             if (config.hotkeyEnabled && hotkeyAllowed(config) && isHotkeyPressed(config.hotkey))
             {
@@ -178,33 +195,78 @@ namespace mdu.ui.telemetry.snapshot
         {
             var config = Telemetry.config;
 
-            if (respectRateLimit && Time.unscaledTime - _lastCaptureTime < config.viewTransitionMinInterval)
+            if (respectRateLimit)
             {
-                return;
+                var interval = config.viewTransitionMinInterval;
+                if (interval > 0f && Time.unscaledTime - _lastCaptureTime < interval)
+                {
+                    // Paced, not dropped: the cycle waits for its slot and captures
+                    // when the interval elapses (processDeferredCaptures, ticked).
+                    _deferredCaptures.Enqueue(new DeferredCapture(view: root as IView, source));
+                    return;
+                }
             }
             _lastCaptureTime = Time.unscaledTime;
 
             try
             {
-                var snapshot = UISnapshotBuilder.build(root);
-                if (snapshot == null)
-                {
-                    return;
-                }
-
-                // One capture per visibility cycle — no cross-cycle content dedupe.
-                // (Pooled views re-open with the same runtime id and an unchanged
-                // node count, which the previous 'last view + node count' check
-                // turned into exactly one capture per view id, ever.)
-                var path = await UISnapshotExporter.exportToFileAsync(snapshot);
-                if (path != null)
-                {
-                    Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
-                }
+                await buildAndExportAsync(root, source);
             }
             catch (Exception ex)
             {
                 Debug.LogException(ex);
+            }
+        }
+
+        /// <summary>Serves the deferred capture queue: one entry per tick, the oldest
+        /// first, as soon as <see cref="TelemetryConfig.viewTransitionMinInterval"/>
+        /// elapsed since the last capture start. A view closed while it was waiting
+        /// cannot produce a live capture any more — skipped loudly; its next
+        /// activation captures normally.</summary>
+        private void processDeferredCaptures(TelemetryConfig config)
+        {
+            if (_disabled || _deferredCaptures.Count == 0)
+            {
+                return;
+            }
+            if (Time.unscaledTime - _lastCaptureTime < config.viewTransitionMinInterval)
+            {
+                return;
+            }
+
+            var entry = _deferredCaptures.Dequeue();
+            var view = entry.View;
+            if (view == null || view.rectTransform == null)
+            {
+                Debug.LogWarning("[Telemetry] deferred capture skipped — view destroyed while paced (captures on its next activation).");
+                return;
+            }
+            if (!view.rectTransform.gameObject.activeInHierarchy)
+            {
+                Debug.LogWarning($"[Telemetry] deferred capture skipped — view '{view.id}' closed before its capture slot (captures on its next activation).");
+                return;
+            }
+
+            _lastCaptureTime = Time.unscaledTime;
+            captureAsync(view, false, entry.Source + ":queued").Forget();
+        }
+
+        private async UniTask buildAndExportAsync(IUI root, string source)
+        {
+            var snapshot = UISnapshotBuilder.build(root);
+            if (snapshot == null)
+            {
+                return;
+            }
+
+            // One capture per visibility cycle — no cross-cycle content dedupe.
+            // (Pooled views re-open with the same runtime id and an unchanged
+            // node count, which the previous 'last view + node count' check
+            // turned into exactly one capture per view id, ever.)
+            var path = await UISnapshotExporter.exportToFileAsync(snapshot);
+            if (path != null)
+            {
+                Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
             }
         }
 
