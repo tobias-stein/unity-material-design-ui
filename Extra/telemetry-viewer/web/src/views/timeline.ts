@@ -557,7 +557,19 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
 
   function syncReplica(): void {
     const token = ++renderToken;
-    const composite = resolveComposite(timeline.viewSpans, timeline.snapshots, playheadMs);
+    // State window (2026-10-24): the playhead rests on an event, but that
+    // event's consequence capture can land later (debounced/settled mutation
+    // captures). Resolve the composite's anchors up to the *next* event —
+    // unbounded on the session tail, so the live auto-step playhead shows the
+    // newest capture instead of lagging one mutation behind.
+    let stateMs: number | null = null;
+    const selection = selectedEventIndex !== -1 ? timeline.events[selectedEventIndex] : undefined;
+    if (selection !== undefined) {
+      const isTail = selectedEventIndex === timeline.events.length - 1;
+      const following = timeline.events.find((event) => event.index > selection.index && event.ms > selection.ms + 1e-6);
+      stateMs = isTail || following === undefined ? Number.POSITIVE_INFINITY : following!.ms;
+    }
+    const composite = resolveComposite(timeline.viewSpans, timeline.snapshots, playheadMs, stateMs);
     if (composite.layers.length === 0) {
       renderedKey = null;
       liveComposite = null;

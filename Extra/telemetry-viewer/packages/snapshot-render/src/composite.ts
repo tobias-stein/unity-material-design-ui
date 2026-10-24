@@ -73,11 +73,22 @@ export interface CompositeResult<S extends CompositeSpanLike, A extends Composit
  * Resolve the composite replica for playhead time `tMs`.
  * `spans` are the view life-cycles, `anchors` the full snapshot ledger list
  * (time-ordered; re-sorted defensively per view id here).
+ *
+ * `stateMs` (2026-10-24): the *state* time for anchor selection, when the
+ * playhead rests on an event that produces a capture a moment later —
+ * mutation captures are debounced/settled, so a click's `ui_snapshot_taken`
+ * ledger point lands (0.25–1.5 s) *after* the click event the playhead snaps
+ * to. "Latest ≤ t" alone would show the pre-click state (the visitor sees the
+ * previous mutation until the *next* event moves time past the capture).
+ * `stateMs` resolves inside that open window instead — the captures taken
+ * between the selected event and the next one are that event's consequence.
+ * Span coverage still follows `tMs`; only the anchor pick is windowed.
  */
 export function resolveComposite<S extends CompositeSpanLike, A extends CompositeAnchorLike>(
   spans: readonly S[],
   anchors: readonly A[],
   tMs: number,
+  stateMs?: number | null,
 ): CompositeResult<S, A> {
   // Capture chain per view id, time-ordered.
   const anchorsByView = new Map<string, A[]>();
@@ -94,12 +105,14 @@ export function resolveComposite<S extends CompositeSpanLike, A extends Composit
     list.sort((a, b) => a.ms - b.ms);
   }
 
+  const resolveMs = stateMs ?? tMs;
+
   const layers: Array<CompositeLayer<S, A>> = [];
   let covering = false;
   for (const span of spans) {
     if (!(span.openMs - EPS <= tMs && tMs <= (span.closeMs ?? Number.POSITIVE_INFINITY) + EPS)) continue;
     covering = true;
-    const anchor = activeAnchorOf(anchorsByView.get(span.viewId ?? ""), span, tMs);
+    const anchor = activeAnchorOf(anchorsByView.get(span.viewId ?? ""), span, resolveMs);
     // Spans without captures (legacy dedupe-era data) stay in the timeline
     // but contribute no layer — the resolution never invents captures.
     if (anchor === null) continue;
@@ -117,11 +130,11 @@ export function resolveComposite<S extends CompositeSpanLike, A extends Composit
   }
 
   // Legacy fallback: no covering span (or none of the covering spans holds
-  // captures) — the pre-composite rule, global chain latest ≤ t.
+  // captures) — the pre-composite rule, global chain latest ≤ resolveMs.
   const global = anchors
     .slice()
     .sort((a, b) => a.ms - b.ms)
-    .reduce<A | null>((best, anchor) => (anchor.ms <= tMs + EPS ? anchor : best), null);
+    .reduce<A | null>((best, anchor) => (anchor.ms <= resolveMs + EPS ? anchor : best), null);
   if (global !== null) {
     return { layers: [{ span: null, anchor: global }], fallback: true, reason: null };
   }
@@ -136,9 +149,10 @@ export function resolveComposite<S extends CompositeSpanLike, A extends Composit
 }
 
 /**
- * The capture a span shows at t: latest anchor ≤ t inside the span; before a
- * span's first anchor the opening capture applies (async capture lands a few
- * ms after the `view_open` event the playhead rests on).
+ * The capture a span shows at `tMs`: latest anchor ≤ tMs inside the span;
+ * before a span's first anchor the opening capture applies (async capture
+ * lands a few ms after the `view_open` event the playhead rests on).
+ * `tMs` here is the caller's *state* time (see resolveComposite's stateMs).
  */
 function activeAnchorOf<A extends CompositeAnchorLike>(
   list: A[] | undefined,

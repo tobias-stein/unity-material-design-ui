@@ -143,4 +143,40 @@ describe("resolveComposite", () => {
     const result = resolveComposite(spans, anchors, 6_000);
     expect(result.layers.map((layer) => layer.span?.viewId)).toEqual(["b", "c", "a"]);
   });
+
+  it("stateMs resolves the consequence capture: a click's debounced mutation capture is its state", () => {
+    // The playhead rests on the click at 1_000; the capture it *caused* lands
+    // at 1_300 (debounce + settle). With plain "latest ≤ t" the visitor sees
+    // the pre-click state until the next event moves time past the capture.
+    const spans = [span({ index: 0, viewId: "main", openMs: 0, closeMs: 10_000 })];
+    const anchors = [
+      anchor(MAIN, 100, "main"), // opening capture (pre-click state)
+      anchor(7, 1_300, "main"), // the click's consequence capture
+    ];
+    const withoutWindow = resolveComposite(spans, anchors, 1_000);
+    expect(withoutWindow.layers[0]!.anchor.index).toBe(MAIN); // unchanged legacy semantics
+    const withWindow = resolveComposite(spans, anchors, 1_000, 2_000); // next event at 2_000
+    expect(withWindow.layers[0]!.anchor.index).toBe(7);
+  });
+
+  it("stateMs at the session tail (last event) reveals the trailing capture", () => {
+    // Live auto-step: the playhead rests on the final event; the mutation
+    // capture it triggered lands after it and must still show.
+    const spans = [span({ index: 0, viewId: "main", openMs: 0, closeMs: 10_000 })];
+    const anchors = [anchor(MAIN, 100, "main"), anchor(7, 5_050, "main")];
+    const result = resolveComposite(spans, anchors, 5_000, Number.POSITIVE_INFINITY);
+    expect(result.layers[0]!.anchor.index).toBe(7);
+  });
+
+  it("stateMs keeps span coverage at the playhead: anchors outside a covered span stay out", () => {
+    // t covers the first cycle; the state window may run long, but captures
+    // belonging to a later cycle of the same view do not leak into it.
+    const spans = [
+      span({ index: 0, viewId: "v", openMs: 0, closeMs: 1_000, row: 0 }),
+      span({ index: 1, viewId: "v", openMs: 5_000, closeMs: 6_000, row: 0 }),
+    ];
+    const anchors = [anchor(1, 500, "v"), anchor(2, 5_500, "v")];
+    const result = resolveComposite(spans, anchors, 800, Number.POSITIVE_INFINITY);
+    expect(result.layers[0]!.anchor.index).toBe(1);
+  });
 });
