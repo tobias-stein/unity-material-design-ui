@@ -300,7 +300,16 @@ namespace mdu.ui
 
                 // Release events under an inactive view are lifecycle noise (view
                 // disposal/cycle end) — that cycle's span is already closed.
-                if (!owner.rectTransform.gameObject.activeInHierarchy)
+                // rectTransform may also legitimately still be null here: the owner
+                // walk runs bottom-up and an ancestor view is mid-construct while
+                // its children's elements construct first (see UI.construct) —
+                // removals under a not-yet-live view are the same noise, skip them.
+                var ownerRoot = owner.rectTransform;
+                if (ownerRoot == null)
+                {
+                    return;
+                }
+                if (!ownerRoot.gameObject.activeInHierarchy)
                 {
                     return;
                 }

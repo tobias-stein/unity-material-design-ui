@@ -88,9 +88,12 @@ namespace mdu.ui.telemetry.snapshot
                 return UniTask.FromResult<string>(null);
             }
 
-            // Main thread: serialize + resolve paths + collect ledger metadata
-            // (everything below rides along even when the ledger is disabled —
-            // building the info object alone costs nothing).
+            // Main thread: reserve the output path + collect ledger metadata — cheap,
+            // collision-free, path ordering stays deterministic. The snapshot itself
+            // is a plain POCO graph nobody mutates afterwards, so its YAML
+            // serialization rides the thread pool *with* the file write: the
+            // whole-tree serialize is the expensive step of an export and no longer
+            // costs a frame during gameplay (2026-10-24).
             WritePlan plan;
             try
             {
@@ -106,7 +109,8 @@ namespace mdu.ui.telemetry.snapshot
             {
                 try
                 {
-                    var bytes = encodeFileBytes(plan.yaml, plan.gzip);
+                    var yaml = serialize(snapshot);
+                    var bytes = encodeFileBytes(yaml, plan.gzip);
                     var hash = sha256Hex(bytes);
                     File.WriteAllBytes(plan.path, bytes);
 
@@ -135,7 +139,6 @@ namespace mdu.ui.telemetry.snapshot
 
         private sealed class WritePlan
         {
-            public string yaml;
             public string directory;
             public string path;
             public bool gzip;
@@ -149,14 +152,14 @@ namespace mdu.ui.telemetry.snapshot
         }
 
         /// <summary>
-        /// Main-thread write preparation: serializes the snapshot, reserves the
-        /// output path and collects all metadata the
-        /// <see cref="Measurements.UiSnapshotTaken"/> point will need (except the
-        /// file hash, which is only knowable after the bytes are written).
+        /// Main-thread write preparation: reserves the output path and collects all
+        /// metadata the <see cref="Measurements.UiSnapshotTaken"/> point will need
+        /// (except the file hash, which is only knowable after the bytes are
+        /// written). Serialization happens later, on the thread pool — see
+        /// <see cref="exportToFileAsync"/>.
         /// </summary>
         private static WritePlan prepareWrite(UISnapshot snapshot)
         {
-            var yaml = serialize(snapshot);
             var directory = resolveDirectory();
             Directory.CreateDirectory(directory);
 
@@ -168,7 +171,6 @@ namespace mdu.ui.telemetry.snapshot
 
             return new WritePlan
             {
-                yaml = yaml,
                 directory = directory,
                 path = path,
                 gzip = Telemetry.config.gzip,

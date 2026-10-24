@@ -22,6 +22,32 @@ namespace mdu.ui.telemetry.snapshot
         private static readonly Dictionary<Type, MemberInfo> _binderMembers = new Dictionary<Type, MemberInfo>();
         private static readonly Vector3[] _cornerBuffer = new Vector3[4];
 
+        // Theme caching: the serialized theme block is identical for every capture of a
+        // session until a setting mutates (dark toggle, device type, seed, fonts, scheme
+        // colors, spacings/sizings). Rebuilding it per capture burns the Enum.GetValues
+        // array allocations, one hex string + dictionary entry per role/style and the
+        // SnapshotTextStyle POCOs *on every snapshot* (measured: ~4.2KB of YAML per file,
+        // ~17% of a median capture). The hash below covers every input buildTheme reads,
+        // so a mutated scheme/typography/table atomically invalidates the cache; between
+        // mutations the per-capture cost collapses to that hash walk (~45 cheap scheme
+        // switches + ~15 style reads, zero allocations).
+        private static SnapshotTheme _cachedTheme;
+        private static uint _cachedThemeHash;
+
+        /// <summary>
+        /// Fixed enum value tables (never change after domain load) — the cached arrays
+        /// remove the Enum.GetValues allocation that the rebuild would otherwise pay
+        /// once per theme rebuild *and* once per capture on the hash walk.
+        /// </summary>
+        private static readonly UISettings.ColorRole[] _colorRoles =
+            (UISettings.ColorRole[])Enum.GetValues(typeof(UISettings.ColorRole));
+        private static readonly UISettings.Spacing[] _spacings =
+            (UISettings.Spacing[])Enum.GetValues(typeof(UISettings.Spacing));
+        private static readonly UISettings.Sizing[] _sizings =
+            (UISettings.Sizing[])Enum.GetValues(typeof(UISettings.Sizing));
+        private static readonly UISettings.TextRole[] _textRoles =
+            (UISettings.TextRole[])Enum.GetValues(typeof(UISettings.TextRole));
+
         /// <summary>Below this alpha an SDF paint is considered not rendered (clear fills used for outline-only shapes).</summary>
         private const float MIN_VISIBLE_ALPHA = 0.01f;
 
@@ -168,6 +194,94 @@ namespace mdu.ui.telemetry.snapshot
                 return null;
             }
 
+            var hash = computeThemeHash(settings);
+            if (_cachedTheme != null && hash == _cachedThemeHash)
+            {
+                return _cachedTheme;
+            }
+
+            _cachedThemeHash = hash;
+            _cachedTheme = buildThemeFromSettings(settings);
+            return _cachedTheme;
+        }
+
+        /// <summary>
+        /// Content hash over exactly the inputs <see cref="buildThemeFromSettings"/>
+        /// serializes: dark flag, seed color, device type, every scheme color, every
+        /// spacing/sizing value and the whole typography table. FNV-1a 32, precision
+        /// matched to what the YAML carries (colors at 8-bit channels, floats at the
+        /// 0.01 round the serializer emits). Runs on every capture — deliberately
+        /// allocation-free, so caching costs only what it saves.
+        /// </summary>
+        private static uint computeThemeHash(UISettings settings)
+        {
+            var hash = 2166136261u;
+
+            hash = Mix(hash, (uint)(settings.useDarkTheme ? 1 : 0));
+            hash = Mix(hash, colorBits(settings.seedColor));
+            hash = Mix(hash, (uint)settings.CurrentDeviceType);
+
+            foreach (var role in _colorRoles)
+            {
+                if (role == UISettings.ColorRole.Customized) { continue; } // not a real palette entry
+                hash = Mix(hash, Mix((uint)role, colorBits(settings.getColor(role))));
+            }
+
+            foreach (var spacing in _spacings)
+            {
+                hash = Mix(hash, Mix((uint)spacing, quantize(settings.GetSpacingInUnityUnits(spacing))));
+            }
+
+            foreach (var sizing in _sizings)
+            {
+                hash = Mix(hash, Mix((uint)sizing, quantize(settings.GetSizeInUnityUnits(sizing))));
+            }
+
+            foreach (var role in _textRoles)
+            {
+                var style = settings.getTextStyle(role);
+                hash = Mix(hash, (uint)role);
+                hash = Mix(hash, quantize(style.fontSize));
+                hash = Mix(hash, (uint)style.fontWeight);
+                hash = Mix(hash, (uint)style.fontStyle);
+                hash = Mix(hash, quantize(style.characterSpacing));
+                hash = Mix(hash, quantize(style.lineSpacing));
+                hash = Mix(hash, stableHash(style.font != null ? style.font.name : null));
+            }
+
+            return hash;
+        }
+
+        private static uint Mix(uint hash, uint value)
+        {
+            return (hash ^ value) * 16777619u;
+        }
+
+        /// <summary>8-bit-per-channel color identity — the precision <see cref="toHex"/> serializes at.</summary>
+        private static uint colorBits(Color color)
+        {
+            return channel(color.r)
+                 | ((uint)channel(color.g) << 8)
+                 | ((uint)channel(color.b) << 16)
+                 | ((uint)channel(color.a) << 24);
+
+            static byte channel(float value)
+            {
+                if (float.IsNaN(value)) { value = 0f; }
+                var scaled = Mathf.Clamp01(value) * 255f;
+                return (byte)(scaled + 0.5f); // round-to-nearest like the hex serialization
+            }
+        }
+
+        /// <summary>0.01-precision float identity in bits — matches the serializer's <see cref="round"/>.</summary>
+        private static uint quantize(float value)
+        {
+            if (float.IsNaN(value)) { value = 0f; }
+            return (uint)Mathf.RoundToInt(round(value) * 100f);
+        }
+
+        private static SnapshotTheme buildThemeFromSettings(UISettings settings)
+        {
             var theme = new SnapshotTheme
             {
                 seedColor = toHex(settings.seedColor),
@@ -179,23 +293,23 @@ namespace mdu.ui.telemetry.snapshot
                 typography = new Dictionary<string, SnapshotTextStyle>()
             };
 
-            foreach (UISettings.ColorRole role in Enum.GetValues(typeof(UISettings.ColorRole)))
+            foreach (UISettings.ColorRole role in _colorRoles)
             {
                 if (role == UISettings.ColorRole.Customized) { continue; } // not a real palette entry
                 theme.palette[role.ToString()] = toHex(settings.getColor(role));
             }
 
-            foreach (UISettings.Spacing spacing in Enum.GetValues(typeof(UISettings.Spacing)))
+            foreach (UISettings.Spacing spacing in _spacings)
             {
                 theme.spacing[spacing.ToString()] = round(settings.GetSpacingInUnityUnits(spacing));
             }
 
-            foreach (UISettings.Sizing sizing in Enum.GetValues(typeof(UISettings.Sizing)))
+            foreach (UISettings.Sizing sizing in _sizings)
             {
                 theme.sizing[sizing.ToString()] = round(settings.GetSizeInUnityUnits(sizing));
             }
 
-            foreach (UISettings.TextRole role in Enum.GetValues(typeof(UISettings.TextRole)))
+            foreach (UISettings.TextRole role in _textRoles)
             {
                 var style = settings.getTextStyle(role);
                 theme.typography[role.ToString()] = new SnapshotTextStyle
@@ -378,6 +492,47 @@ namespace mdu.ui.telemetry.snapshot
             }
         }
 
+        /// <summary>
+        /// Public-member cache per Data struct type. `fillDataAndRoles` runs
+        /// reflection for *every node of every capture* — the GetFields/GetProperties
+        /// scans are the hot cost, so they resolve once per type here (properties
+        /// prefiltered exactly as the old per-item checks did: readable, no indexers)
+        /// and the per-node loop walks the cached arrays.
+        /// </summary>
+        private sealed class DataMembers
+        {
+            public FieldInfo[] fields;          // public instance fields (the expected shape)
+            public PropertyInfo[] properties;   // fallback when a Data struct uses properties
+        }
+
+        private static readonly Dictionary<Type, DataMembers> _dataMembers = new Dictionary<Type, DataMembers>();
+
+        private static DataMembers dataMembersOf(Type type)
+        {
+            if (!_dataMembers.TryGetValue(type, out var members))
+            {
+                var fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
+                PropertyInfo[] properties = null;
+                if (fields.Length == 0)
+                {
+                    var all = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                    var usable = new List<PropertyInfo>();
+                    foreach (var property in all)
+                    {
+                        if (property.CanRead && property.GetIndexParameters().Length == 0)
+                        {
+                            usable.Add(property);
+                        }
+                    }
+                    properties = usable.ToArray();
+                }
+                members = new DataMembers { fields = fields, properties = properties };
+                _dataMembers[type] = members;
+            }
+
+            return members;
+        }
+
         private static void fillDataAndRoles(IUI iui, SnapshotNode node)
         {
             var boxed = getBinderData(iui);
@@ -390,11 +545,11 @@ namespace mdu.ui.telemetry.snapshot
             Dictionary<string, string> colorRoles = null;
             string textRole = null;
 
-            var fields = dataType.GetFields(BindingFlags.Public | BindingFlags.Instance);
-            if (fields.Length > 0)
+            var members = dataMembersOf(dataType);
+            if (members.fields.Length > 0)
             {
                 node.data = new Dictionary<string, object>();
-                foreach (var field in fields)
+                foreach (var field in members.fields)
                 {
                     object value;
                     try { value = field.GetValue(boxed); }
@@ -421,11 +576,9 @@ namespace mdu.ui.telemetry.snapshot
             {
                 // Data structs are expected to use public fields; fall back to public
                 // properties so a future refactor doesn't silently drop state.
-                var properties = dataType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
                 node.data = new Dictionary<string, object>();
-                foreach (var property in properties)
+                foreach (var property in members.properties)
                 {
-                    if (!property.CanRead || property.GetIndexParameters().Length > 0) { continue; }
                     object value;
                     try { value = property.GetValue(boxed); }
                     catch { continue; }
@@ -641,7 +794,7 @@ namespace mdu.ui.telemetry.snapshot
             if (type.IsClass || type.IsValueType)
             {
                 var map = new Dictionary<string, object>();
-                foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+                foreach (var field in plainStructFieldsOf(type))
                 {
                     object fieldValue;
                     try { fieldValue = field.GetValue(value); }
@@ -659,6 +812,24 @@ namespace mdu.ui.telemetry.snapshot
             }
 
             return value.ToString();
+        }
+
+        /// <summary>
+        /// Cached public instance fields per type for the <see cref="toPlain"/> struct
+        /// walk — nested Data structs hit this recursion per field value, so the
+        /// GetFields scan resolves once per type instead of per value.
+        /// </summary>
+        private static readonly Dictionary<Type, FieldInfo[]> _plainStructFields = new Dictionary<Type, FieldInfo[]>();
+
+        private static FieldInfo[] plainStructFieldsOf(Type type)
+        {
+            if (!_plainStructFields.TryGetValue(type, out var fields))
+            {
+                fields = type.GetFields(BindingFlags.Public | BindingFlags.Instance);
+                _plainStructFields[type] = fields;
+            }
+
+            return fields;
         }
 
         private static SnapshotRect rectRootRelative(RectTransform rect, RectTransform root)
