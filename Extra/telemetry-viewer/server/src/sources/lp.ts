@@ -207,6 +207,7 @@ function toRawFields(parsed: ParsedLine): RawEventFields {
       case "owner": if (value.kind === "string") fields.owner = value.value; break;
       case "platform": if (value.kind === "string") fields.platform = value.value; break;
       case "screen": if (value.kind === "string") fields.screen = value.value; break;
+      case "source": if (value.kind === "string") fields.source = value.value; break;
       default: break; // unknown fields (§4.4): tolerated, not projected
     }
   }

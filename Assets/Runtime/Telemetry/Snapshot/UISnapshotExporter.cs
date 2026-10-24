@@ -182,7 +182,8 @@ namespace mdu.ui.telemetry.snapshot
                     screenWidth = app != null ? app.screenWidth : 0f,
                     screenHeight = app != null ? app.screenHeight : 0f,
                     owner = string.IsNullOrEmpty(app?.productName) ? null : app.productName,
-                    platform = app?.platform
+                    platform = app?.platform,
+                    source = snapshot.source
                 }
             };
         }

@@ -365,6 +365,7 @@ function applyFieldValue(fields: RawEventFields, field: string, rawValue: unknow
     case "owner": fields.owner = String(rawValue); break;
     case "platform": fields.platform = String(rawValue); break;
     case "screen": fields.screen = String(rawValue); break;
+    case "source": fields.source = String(rawValue); break;
     default: break;
   }
 }

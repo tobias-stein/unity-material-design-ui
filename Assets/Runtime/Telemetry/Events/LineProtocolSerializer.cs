@@ -88,6 +88,7 @@ namespace mdu.ui.telemetry.events
             hasField = appendField(sb, hasField, "owner", e.owner);
             hasField = appendField(sb, hasField, "platform", e.platform);
             hasField = appendField(sb, hasField, "screen", e.screen);
+            hasField = appendField(sb, hasField, "source", e.captureSource);
 
             sb.Append(' ').Append(e.timestampNs);
             return sb.ToString();

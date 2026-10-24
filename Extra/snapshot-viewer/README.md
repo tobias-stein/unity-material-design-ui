@@ -73,8 +73,21 @@ Triggers (configurable via `Resources/Settings/TelemetrySettings` asset or
 `Telemetry.configure(cfg => …)`):
 
 - **F9** (editor/dev builds by default) — capture the active view
-- **view transitions** — auto-capture after `pushAsync`/`popAsync` completes
-  (rate-limited, deduped, retention-pruned)
+- **view transitions** — auto-capture shortly after `pushAsync`/`popAsync`
+  completes: the capture waits a short settle window (`viewTransitionSettle`,
+  0.5 s by default) so views that populate or animate themselves while opening
+  are captured settled instead of mid-animation; a view closed inside the
+  window captures nothing for that cycle (rate-limited, retention-pruned)
+- **popup shown** — auto-capture when a Dialog/Snackbar becomes visible
+- **runtime mutations** — UI elements created or removed while a view is open
+  (dynamic panels, spawned controls, stack-panel closes). Every structural
+  change under a view refreshes that view's debounce window
+  (`runtimeCaptureEnabled`, `mutationDebounce`); one snapshot fires when the
+  view settles, so bursts coalesce — this also back-fills the content a view
+  creates asynchronously right after activation (which the transition capture
+  is too early for). Per-cycle cap (`mutationMaxCapturesPerCycle`) and a
+  content fingerprint (`mutationDedupe`) keep churn from flooding the
+  timeline.
 
 Every **successful** snapshot export additionally records one ledger point in
 the same event stream (`ui_snapshot_taken`) so tools can find and identify
@@ -82,7 +95,7 @@ snapshots without re-parsing files. `TelemetryConfig.snapshotLedger` (default
 on) gates it:
 
 ```
-ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH> <ns>
+ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH>[,source=<trigger>] <ns>
 ```
 
 - **`key`** — device-agnostic storage key
@@ -113,6 +126,9 @@ theme:    { seedColor, isDark, deviceType,
             spacing: { Spacing -> units },
             sizing:  { Sizing -> units },
             typography: { TextRole -> { fontSize, fontWeight, … } } }
+source:   view-transition | popup-shown | mutation | hotkey [, "...:queued"]
+          # why the snapshot was captured (mutation = runtime UI change);
+          # absent on legacy/manual captures
 nodes:    # flat list, parents before children
   - id: <guid | anon:path>      # stable _id from the Unity runtime
     kind: ui | layout           # IUI element vs pure RectTransform container

@@ -104,6 +104,14 @@ namespace mdu.ui.telemetry.events
 
         /// <summary>Screensize summary "WxH" (synced with screenWidth/screenHeight).</summary>
         public string screen;
+
+        /// <summary>
+        /// Trigger the snapshot came from ("view-transition", "popup-shown",
+        /// "mutation", "hotkey" — or their paced "...:queued" variants). May be
+        /// null when the source field was unset (legacy/manual captures or before
+        /// the runtime carried it in the snapshot).
+        /// </summary>
+        public string captureSource;
     }
 
     /// <summary>
@@ -125,5 +133,8 @@ namespace mdu.ui.telemetry.events
         public float screenHeight;
         public string owner;
         public string platform;
+
+        /// <summary>Why the snapshot was captured (see TelemetryEvent.captureSource).</summary>
+        public string source;
     }
 }

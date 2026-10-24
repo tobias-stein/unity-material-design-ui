@@ -36,6 +36,12 @@ namespace mdu.ui.telemetry
                  "every view cycle: activations paced out by the interval wait in a defer queue and " +
                  "capture when it elapses instead of being dropped.")]
         public float viewTransitionMinInterval = 1f;
+        [Tooltip("Seconds to wait after a view activation before taking its transition snapshot, " +
+                 "so views that populate or animate themselves while opening (panels sliding in, " +
+                 "async content creation) are captured settled instead of mid-animation. " +
+                 "0 = capture immediately. If the view closes inside the window the capture is " +
+                 "skipped for that cycle — its lifecycle events are recorded regardless.")]
+        public float viewTransitionSettle = 0.5f;
         [Tooltip("Snap one capture per near-simultaneous duplicate raise of the same view (one capture per visibility cycle is always kept). The old cross-cycle 'view id + node count' dedupe is gone — pooled views re-open with the same id, which starved re-opened cycles and consecutive snackbars of their captures.")]
         public bool viewTransitionDedupe = true;
 
@@ -67,6 +73,32 @@ namespace mdu.ui.telemetry
         public bool popupTrackingEnabled = true;
         [Tooltip("Popup view type names excluded from lifecycle tracking and snapshot capture.")]
         public string[] popupExcludedViews = { "Tooltip" };
+
+        [Header("Runtime mutation trigger (UI created while a view is open)")]
+        [Tooltip("Capture snapshots when UI elements are created during a open view's " +
+                 "lifetime (panels spawning, dynamic lists, …). Each creation under a view " +
+                 "refreshes a per-view debounce window; one snapshot fires when it settles, " +
+                 "so bursts (panel + its contents) coalesce. Also fills the gap left by the " +
+                 "view-transition capture when a view populates itself asynchronously right " +
+                 "after activation.")]
+        public bool runtimeCaptureEnabled = true;
+        [Tooltip("Seconds after the last structural UI change (create/remove) under a view " +
+                 "before the debounced mutation capture fires. Anything changing inside the " +
+                 "window coalesces into that single snapshot. Kept short on purpose — the " +
+                 "burst a spawned panel produces (panel + its contents) lands within ~100ms.")]
+        public float mutationDebounce = 0.25f;
+        [Tooltip("Maximum mutation captures per view visibility cycle (0 = unlimited). " +
+                 "Emergency only: it must stay high enough that normal interactive use never " +
+                 "hits it (a dynamic view can easily consume one slot per open/close action); " +
+                 "the mutation dedupe makes a high cap cheap — structural duplicates never " +
+                 "export. A hit is logged as a warning.")]
+        public int mutationMaxCapturesPerCycle = 50;
+        [Tooltip("Skip exporting a mutation capture whose node tree (ids, types, rects) is " +
+                 "identical to the view's last exported one within the current visibility " +
+                 "cycle — e.g. a created element that settled into an unchanged layout. " +
+                 "Scoped to mutation captures only: managed transitions and popups always " +
+                 "export, so the 'exactly one snapshot per cycle' contract is untouched.")]
+        public bool mutationDedupe = true;
 
         /// <summary>Whether this popup-layer view is excluded from tracking (type-name match against popupExcludedViews).</summary>
         public bool isExcludedPopup(IView view)

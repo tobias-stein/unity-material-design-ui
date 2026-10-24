@@ -102,6 +102,11 @@ namespace mdu.ui
                     instance.binder.data = data.Value;
                 }
 
+                if (instance is not IView)
+                {
+                    notifyCreated(instance);
+                }
+
                 return instance;
             })
             .ContinueWith(async instance =>
@@ -114,6 +119,56 @@ namespace mdu.ui
             });
         }
 
+
+        /// <summary>
+        /// Notifies observers that this element now exists in the live hierarchy,
+        /// attributed to the nearest IView ancestor (the view it was created under
+        /// — not the top-of-stack context). Fires after parenting/activation, so
+        /// the hierarchy is final and the last raise in the pipeline has nothing
+        /// left to depend on. IView instances are skipped by the caller (they
+        /// capture through view-transition hooks instead).
+        /// </summary>
+        private static void notifyCreated(TUI instance)
+        {
+            try
+            {
+                // elements with no view ancestor (explicitly unparented staging,
+                // or a missing mainView) render nowhere a snapshot could reach
+                // them — skip rather than mis-attribute.
+                var owner = findOwningView(instance.rectTransform);
+                if (owner != null)
+                {
+                    UIInteractions.raiseUIElementCreated(instance, owner);
+                }
+            }
+            catch (Exception ex)
+            {
+                // notification/telemetry must never break element creation
+                Debug.LogException(ex);
+            }
+        }
+
+        /// <summary>
+        /// Nearest IView on or above the given transform. Manual walk (not
+        /// GetComponentInParent, whose default active-only search misses parents
+        /// from views that are mid-transition or not yet shown). Skips views that
+        /// are already destroyed (Unity null semantics for interfaces).
+        /// </summary>
+        private static IView findOwningView(RectTransform rect)
+        {
+            for (var node = rect; node != null; node = node.parent as RectTransform)
+            {
+                if (node.TryGetComponent(out IView view))
+                {
+                    if (view is UnityEngine.Object unityObject && unityObject == null)
+                    {
+                        continue;
+                    }
+                    return view;
+                }
+            }
+            return null;
+        }
 
         public void ensureUniqueId(HashSet<string> takenIds)
         {
@@ -171,6 +226,13 @@ namespace mdu.ui
         public new void Awake()
         {
             base.Awake();
+            // Assign early so code running during Awake — before the post-instantiate
+            // construct()/Constructor pass — can already parent children to this
+            // element (e.g. views that create their first content in Awake). Without
+            // it such parents fall back to the current context's mainView and the
+            // element briefly roots (and mis-attributes) under a foreign view.
+            // Constructor() re-assigns idempotently afterwards.
+            rectTransform ??= GetComponent<RectTransform>();
             UI.invalidateCache();
         }
 
@@ -178,18 +240,77 @@ namespace mdu.ui
         {
             base.OnDestroy();
             UI.invalidateCache();
+
+            // Destroyed while still live (never released back to the pool by its
+            // Dispose) — the two paths are mutually exclusive, so no removal can
+            // double-fire. Destruction from the pool (or of an already released
+            // instance) carries no view-relevant change: the release itself –
+            // with a valid owner view — already raised the removal event in
+            // Dispose().
+            if (!_isPooled)
+            {
+                notifyRemoved((TUI)this);
+            }
         }
 
         public virtual void Dispose()
         {
             if (_isPooled) { return; }
             
+            var wasLive = !IsDestroyed();
+            if (wasLive)
+            {
+                // Raise before release: the hierarchy (and thereby the owner view
+                // attribution) is still intact here — the release path below
+                // deactivates the element without destroying it, so no OnDestroy
+                // would follow for this removal.
+                notifyRemoved((TUI)this);
+            }
+
             _pool.free((TUI)this, true);
             _isPooled = true;
 
             if (!IsDestroyed())
             {
                 gameObject.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// Notifies observers that this element left the live hierarchy (release
+        /// or live destruction). Wrapped in try/catch like every telemetry raise —
+        /// notification must never break release/destruction. Elements with no
+        /// live view ancestor, views themselves, and removals under an already
+        /// hidden view are skipped.
+        /// </summary>
+        private static void notifyRemoved(TUI instance)
+        {
+            try
+            {
+                if (instance is IView)
+                {
+                    return; // views are lifecycle-tracked (view_open/view_close)
+                }
+
+                var owner = findOwningView(instance.rectTransform);
+                if (owner == null)
+                {
+                    return;
+                }
+
+                // Release events under an inactive view are lifecycle noise (view
+                // disposal/cycle end) — that cycle's span is already closed.
+                if (!owner.rectTransform.gameObject.activeInHierarchy)
+                {
+                    return;
+                }
+
+                UIInteractions.raiseUIElementRemoved(instance, owner);
+            }
+            catch (Exception ex)
+            {
+                // telemetry must never break release/destruction
+                Debug.LogException(ex);
             }
         }
 

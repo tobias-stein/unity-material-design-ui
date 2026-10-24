@@ -447,7 +447,7 @@ Every successful snapshot export records one **ledger point** in the same
 event pipeline as interaction events:
 
 ```
-ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH> <ns>
+ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash=<sha256>,nodes=<n>,width=<w>,height=<h>,owner=<product>,platform=<p>,screen=<WxH>[,source=<trigger>] <ns>
 ```
 
 - **One capture per visibility cycle** (fix 2026-10-21): every view comes from
@@ -461,6 +461,20 @@ ui_snapshot_taken,session=<sid>,view=<View>,view_id=<guid> key=<storageKey>,hash
   to main-view transitions. Sessions recorded before the fix keep their
   missing captures (nothing is invented — spans without captures surface as
   warn chips in the timeline replica).
+
+- **Runtime-mutation captures** (2026-10-23): UI elements created or removed
+  while a view is open (dynamic panels, spawned controls, stack-panel closes)
+  refresh a per-view debounce window; one capture fires when the window
+  settles, tagged `source=mutation` (or `mutation:queued` when paced). The
+  dedupe behind it is cycle-scoped by design — fingerprint equality only
+  suppresses *mutation* captures within the *same* visibility cycle, so the
+  re-open starvation above cannot return. Lifecycle captures and parse-time
+  behaviour are unchanged.
+- `source` — capture trigger (`view-transition`, `popup-shown`, `mutation`,
+  `hotkey`, or their paced `...:queued` variants); optional field, absent on
+  points written before the runtime carried it. The server/timeline ignore it
+  today; it is projected for the client (`lp.ts` / `influx.ts`) so future
+  badges need no re-parsing.
 
 - `key` — device-agnostic **storage key** (`snapshots/<yyyy>/<mm>/<dd>/<fileName>`,
   forward slashes; the leaf equals the on-disk file name). Files themselves

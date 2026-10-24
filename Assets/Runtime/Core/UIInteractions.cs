@@ -51,6 +51,35 @@ namespace mdu.ui
         /// </summary>
         public static event Action<IView> onViewEnded;
 
+        /// <summary>
+        /// Raised when a UI element was newly created and is now part of the live
+        /// hierarchy (from <see cref="UIBase{TUI,TData}.create"/> after the instance
+        /// is parented, activated and data-bound). <see cref="ownerView"/> is the
+        /// nearest IView ancestor resolved right after parenting (so an element is
+        /// attributed to the view it was created *under* — not to the top-of-stack
+        /// context), or a view under which the element anchors by default when no
+        /// explicit parent was given. Never raised for IView instances themselves
+        /// (views capture through view-transition hooks) nor for unparented
+        /// elements. Telemetry debounces mutations per owner view into snapshot
+        /// captures; with no listener raising is a no-op.
+        /// </summary>
+        public static event Action<IUI, IView> onUIElementCreated;
+
+        /// <summary>
+        /// Raised when a live UI element left the visible hierarchy through one of
+        /// the two central release paths: pooled/release (<see cref="UIBase{TUI,TData}.Dispose"/>)
+        /// or destruction without a prior release (direct Destroy, e.g. a stack
+        /// panel closing, or scene teardown — pooled instances already released
+        /// are excluded so their destruction cannot double-fire). Attributed to
+        /// the nearest IView ancestor, exactly like <see cref="onUIElementCreated"/>;
+        /// skipped when the owner view is inactive (view already hidden — its
+        /// lifecycle capture covers that state). Telemetry treats a removal the
+        /// same as a creation: it refreshes the owner view's debounced mutation
+        /// capture, so structural removals (a panel closing) show up in the
+        /// timeline as well.
+        /// </summary>
+        public static event Action<IUI, IView> onUIElementRemoved;
+
         public static bool hasListeners => onInteraction != null;
 
         public static void raise(UIInteraction interaction) => onInteraction?.Invoke(interaction);
@@ -58,6 +87,17 @@ namespace mdu.ui
         public static void raiseViewShown(IView view) => onViewShown?.Invoke(view);
 
         public static void raiseViewEnded(IView view) => onViewEnded?.Invoke(view);
+
+        /// <summary>
+        /// Notifies a new live hierarchy element. Subscriber exceptions (including
+        /// the owner-view resolution the caller does) must never break element
+        /// creation — callers wrap in try/catch too, this is the last line of defense.
+        /// </summary>
+        public static void raiseUIElementCreated(IUI element, IView ownerView) =>
+            onUIElementCreated?.Invoke(element, ownerView);
+
+        public static void raiseUIElementRemoved(IUI element, IView ownerView) =>
+            onUIElementRemoved?.Invoke(element, ownerView);
 
         public static void click(IUI element) =>
             onInteraction?.Invoke(new UIInteraction(UIInteractionType.Click, element));

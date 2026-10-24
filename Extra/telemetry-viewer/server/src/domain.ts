@@ -46,6 +46,8 @@ export interface RawEventFields {
   owner?: string;
   platform?: string;
   screen?: string;
+  /** Capture trigger ("view-transition", "popup-shown", "mutation", …); missing on legacy data. */
+  source?: string;
 }
 
 export interface RawEvent {

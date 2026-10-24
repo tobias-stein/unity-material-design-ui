@@ -416,7 +416,8 @@ namespace mdu.ui.telemetry.events
                     screenHeight = info.screenHeight,
                     screen = formatScreen(info.screenWidth, info.screenHeight),
                     owner = info.owner,
-                    platform = info.platform
+                    platform = info.platform,
+                    captureSource = info.source
                 });
             }
             catch (Exception ex)

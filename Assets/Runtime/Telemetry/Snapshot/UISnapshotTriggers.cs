@@ -12,6 +12,9 @@ namespace mdu.ui.telemetry.snapshot
     /// Snapshot trigger feature, registered by <see cref="Telemetry"/> at bootstrap:
     ///  - hotkey (default F9, editor/dev builds only)
     ///  - view transitions (<see cref="ViewManager.onViewActivated"/>)
+    ///  - runtime mutations (<see cref="UIInteractions.onUIElementCreated"/> /
+    ///    <see cref="UIInteractions.onUIElementRemoved"/> — UI created or removed
+    ///    while a view is open, debounced per view)
     /// Ticked by the hidden Telemetry host; all capture work is fire-and-forget
     /// and never throws into the app.
     /// </summary>
@@ -19,6 +22,8 @@ namespace mdu.ui.telemetry.snapshot
     {
         private bool _viewHooked;
         private bool _popupHooked;
+        private bool _mutationHooked;
+        private bool _viewEndHooked;
         private bool _disabled;
         private float _lastCaptureTime = float.NegativeInfinity;
         /// <summary>
@@ -52,6 +57,43 @@ namespace mdu.ui.telemetry.snapshot
         /// only defends against accidental double-fires on the same frame.</summary>
         private const float DuplicateRaiseWindow = 0.1f;
 
+        /// <summary>Capture source of every runtime-mutation capture (paced ones
+        /// append the existing ":queued" suffix, matched by prefix below).</summary>
+        private const string MutationSource = "mutation";
+
+        /// <summary>
+        /// One create-raise under a view. The create raise happens on the same
+        /// frame as the element attaches; the capture is deferred until the view's
+        /// debounce window has stayed quiet for <see cref="TelemetryConfig.mutationDebounce"/>
+        /// (served by the tick loop), so a burst — a panel plus the elements it
+        /// spawns during its open animation — coalesces into one snapshot.
+        /// </summary>
+        private readonly struct PendingMutation
+        {
+            public readonly IView View;
+            public readonly float DueTime;
+            public PendingMutation(IView view, float dueTime) { View = view; DueTime = dueTime; }
+        }
+
+        /// <summary>Active debounce windows keyed by view key (id, else runtime instance id).</summary>
+        private readonly Dictionary<string, PendingMutation> _pendingMutations = new();
+
+        /// <summary>Mutation captures already served in the current visibility cycle
+        /// (same key). Capped by <see cref="TelemetryConfig.mutationMaxCapturesPerCycle"/>;
+        /// reset per view when the view's cycle ends or a lifecycle capture exports.</summary>
+        private readonly Dictionary<string, int> _mutationCapturesPerCycle = new();
+
+        /// <summary>View keys already warned about the per-cycle cap this cycle —
+        /// the refusal repeats on every settle otherwise, so it warns once per
+        /// view per cycle (cleared wherever the cap resets).</summary>
+        private readonly HashSet<string> _capWarnedViews = new();
+
+        /// <summary>Fingerprint (<see cref="UISnapshotBuilder.fingerprint"/>) of the last
+        /// exported snapshot per view — the content-identity check behind
+        /// mutation dedupe. Scoped to the cycle (cleared on view end) and to the
+        /// dedupe being enabled; lifecycle captures always overwrite it.</summary>
+        private readonly Dictionary<string, string> _lastFingerprintByView = new();
+
         public void tick()
         {
             if (_disabled)
@@ -78,7 +120,10 @@ namespace mdu.ui.telemetry.snapshot
 
             ensureViewHook();
             ensurePopupHook();
+            ensureMutationHook();
+            ensureViewEndHook();
             processDeferredCaptures(config);
+            processPendingMutations(config);
 
             if (config.hotkeyEnabled && hotkeyAllowed(config) && isHotkeyPressed(config.hotkey))
             {
@@ -125,7 +170,58 @@ namespace mdu.ui.telemetry.snapshot
                 return;
             }
 
-            captureAsync(view, true, "view-transition").Forget();
+            // Stamp pacing now rather than when the settled capture actually
+            // builds: the delay keeps later mutation firings (mutationDebounce
+            // is shorter than the settle window) queued behind this cycle's
+            // transition capture instead of racing it with mid-animation content.
+            _lastCaptureTime = Time.unscaledTime;
+            captureViewTransitionSettledAsync(view, config).Forget();
+        }
+
+        /// <summary>
+        /// Takes the transition snapshot after a short settle window so views that
+        /// populate or animate themselves while opening (panels sliding in, async
+        /// content creation) are captured settled instead of mid-animation. The
+        /// view must still be live and active when the window elapses — a view
+        /// closed inside the window captures nothing (its lifecycle events are
+        /// recorded regardless; its next activation captures normally).
+        /// </summary>
+        private async UniTask captureViewTransitionSettledAsync(IView view, TelemetryConfig config)
+        {
+            var settle = Mathf.Max(0f, config.viewTransitionSettle);
+            if (settle > 0f)
+            {
+                try
+                {
+                    await UniTask.Delay(
+                        TimeSpan.FromSeconds(settle),
+                        DelayType.Realtime,
+                        PlayerLoopTiming.Update);
+                }
+                catch (OperationCanceledException)
+                {
+                    return; // app/player teardown
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                    return;
+                }
+            }
+
+            // The view may have closed (or been destroyed) inside the settle window.
+            if (view == null || view.rectTransform == null ||
+                (view is UnityEngine.Object destroyed && destroyed == null) ||
+                !view.rectTransform.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            // Respect-rate-limit is false on purpose: pacing was already booked
+            // at raise time (see onViewActivated) — going through the paced
+            // queue here would re-order this capture behind the mutations it
+            // itself displaced.
+            captureAsync(view, false, "view-transition").Forget();
         }
 
         /// <summary>
@@ -173,6 +269,210 @@ namespace mdu.ui.telemetry.snapshot
             }
 
             captureAsync(view, false, "popup-shown").Forget();
+        }
+
+        /// <summary>
+        /// Runtime-mutation capture: every <see cref="UIInteractions.onUIElementCreated"/>
+        /// and <see cref="UIInteractions.onUIElementRemoved"/> raise (UI appearing or
+        /// disappearing while a view is open) refreshes that view's debounce window; a
+        /// snapshot fires once the window stays quiet for
+        /// <see cref="TelemetryConfig.mutationDebounce"/>, so a burst of changes
+        /// (panel + the elements it spawns during its open animation) coalesces into
+        /// one snapshot that shows the settled state. This also closes the gap left
+        /// by the view-transition capture when a view populates itself
+        /// asynchronously right after activation: that extra create-raise schedules
+        /// exactly the follow-up capture the initial snapshot was too early for.
+        /// </summary>
+        private void ensureMutationHook()
+        {
+            if (_mutationHooked)
+            {
+                return;
+            }
+
+            UIInteractions.onUIElementCreated += onUIElementCreated;
+            UIInteractions.onUIElementRemoved += onUIElementRemoved;
+            _mutationHooked = true;
+        }
+
+        private void onUIElementCreated(IUI element, IView ownerView) => scheduleMutationCapture(ownerView, "creation");
+
+        private void onUIElementRemoved(IUI element, IView ownerView) => scheduleMutationCapture(ownerView, "removal");
+
+        /// <summary>
+        /// Schedules/refreshes the owner view's debounced mutation capture. Called
+        /// for both creations and removals — a structural change of either kind
+        /// (panel spawning, panel closing, elements vanishing from a list) is one
+        /// settle-and-capture cycle.
+        /// </summary>
+        private void scheduleMutationCapture(IView ownerView, string reason)
+        {
+            try
+            {
+                TelemetryConfig config;
+                try
+                {
+                    config = Telemetry.config;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogException(ex);
+                    return;
+                }
+
+                if (!config.enabled || !config.runtimeCaptureEnabled)
+                {
+                    return;
+                }
+
+                // Element without an owner (unparented staging) never reaches a
+                // snapshot; views themselves capture via view transitions.
+                // rectTransform may legitimately still be null here: elements
+                // created while the owning view is mid-construct (e.g. during
+                // Awake-raised content) — the debounce serve re-checks and
+                // resolves the view by then, so don't drop on it.
+                if (ownerView == null)
+                {
+                    return;
+                }
+                if (ownerView is UnityEngine.Object destroyedView && destroyedView == null)
+                {
+                    return;
+                }
+
+                // Popups only mutate-capture while popup tracking covers them —
+                // the same gate as the popup-shown trigger.
+                if (ownerView.layer == CanvasLayer.POPUP &&
+                    (!config.popupTrackingEnabled || config.isExcludedPopup(ownerView)))
+                {
+                    return;
+                }
+
+                // Refresh, never extend: the window always sits mutationDebounce
+                // after the newest structural change, so a continuous stream
+                // settles into one capture for its duration.
+                var key = viewKeyOf(ownerView);
+                _pendingMutations[key] = new PendingMutation(
+                    ownerView,
+                    Time.unscaledTime + Mathf.Max(0f, config.mutationDebounce));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        /// <summary>Serves due debounce windows: one capture per settled view per
+        /// tick, respecting the usual pacing (excess goes through the deferred
+        /// queue) and the per-cycle mutation cap. A view that died or closed
+        /// inside the settle window is dropped — its next activation captures
+        /// normally.</summary>
+        private void processPendingMutations(TelemetryConfig config)
+        {
+            if (_pendingMutations.Count == 0 || !config.runtimeCaptureEnabled)
+            {
+                return;
+            }
+
+            var now = Time.unscaledTime;
+            List<string> due = null;
+            foreach (var pair in _pendingMutations)
+            {
+                if (now >= pair.Value.DueTime)
+                {
+                    (due ??= new List<string>()).Add(pair.Key);
+                }
+            }
+            if (due == null)
+            {
+                return;
+            }
+
+            foreach (var key in due)
+            {
+                if (!_pendingMutations.TryGetValue(key, out var pending))
+                {
+                    continue; // settled again by a newer raise in the meantime
+                }
+                _pendingMutations.Remove(key);
+
+                var view = pending.View;
+                if (view == null || view.rectTransform == null ||
+                    (view is UnityEngine.Object destroyed && destroyed == null))
+                {
+                    continue; // view died inside the debounce window
+                }
+                if (!view.rectTransform.gameObject.activeInHierarchy)
+                {
+                    continue; // hidden (closed/on to the pool) by the time the window settled
+                }
+                var count = 0;
+                if (config.mutationMaxCapturesPerCycle > 0)
+                {
+                    _mutationCapturesPerCycle.TryGetValue(key, out count);
+                    if (count >= config.mutationMaxCapturesPerCycle)
+                    {
+                        // Cap reached for this cycle. Refused loudly (once per view
+                        // and cycle, otherwise every settle spams) so a hit is
+                        // never confused with "mutations are not captured" — the
+                        // lifecycle capture of the next cycle resets it.
+                        if (_capWarnedViews.Add(key))
+                        {
+                            Debug.LogWarning(
+                                $"[Telemetry] mutation capture cap ({config.mutationMaxCapturesPerCycle}) " +
+                                $"reached for '{view.id}' this cycle — further structural changes " +
+                                "are not captured until its next visibility cycle " +
+                                $"(TelemetryConfig.mutationMaxCapturesPerCycle).");
+                        }
+                        continue;
+                    }
+                }
+
+                _mutationCapturesPerCycle[key] = count + 1;
+                // respectRateLimit: paced, not dropped — the deferred queue serves
+                // it when the pacing interval elapses, exactly like transitions.
+                captureAsync(view, true, MutationSource).Forget();
+            }
+        }
+
+        /// <summary>Cycle-boundary cleanup: a view that stopped being visible drops
+        /// its pending debounce window, its mutation cap and its dedupe
+        /// fingerprint — the next cycle starts fresh (pooled views re-open with
+        /// the same key and must capture again even if the tree looks identical).</summary>
+        private void ensureViewEndHook()
+        {
+            if (_viewEndHooked)
+            {
+                return;
+            }
+
+            UIInteractions.onViewEnded += onViewEndedForMutations;
+            _viewEndHooked = true;
+        }
+
+        private void onViewEndedForMutations(IView view)
+        {
+            if (view == null)
+            {
+                return;
+            }
+
+            var key = viewKeyOf(view);
+            _pendingMutations.Remove(key);
+            _mutationCapturesPerCycle.Remove(key);
+            _lastFingerprintByView.Remove(key);
+            _capWarnedViews.Remove(key);
+        }
+
+        /// <summary>Stable per-view key: the view's id when set, else its transform
+        /// instance id — same convention as <see cref="raiseGuardAllows"/>' guard.</summary>
+        private static string viewKeyOf(IView view)
+        {
+            var id = view.id;
+            return !string.IsNullOrEmpty(id) ? id
+                : view.rectTransform != null ? view.rectTransform.GetInstanceID().ToString()
+                : view is UnityEngine.Object unityView ? unityView.GetInstanceID().ToString()
+                : null;
         }
 
         /// <summary>Suppresses only near-simultaneous duplicate raises of the same
@@ -253,21 +553,69 @@ namespace mdu.ui.telemetry.snapshot
 
         private async UniTask buildAndExportAsync(IUI root, string source)
         {
-            var snapshot = UISnapshotBuilder.build(root);
+            var snapshot = UISnapshotBuilder.build(root, source);
             if (snapshot == null)
             {
                 return;
             }
 
-            // One capture per visibility cycle — no cross-cycle content dedupe.
-            // (Pooled views re-open with the same runtime id and an unchanged
-            // node count, which the previous 'last view + node count' check
-            // turned into exactly one capture per view id, ever.)
-            var path = await UISnapshotExporter.exportToFileAsync(snapshot);
-            if (path != null)
+            var config = Telemetry.config;
+            var view = root as IView;
+            var key = view != null ? viewKeyOf(view) : null;
+            var isMutation = !string.IsNullOrEmpty(source) &&
+                             source.StartsWith(MutationSource, StringComparison.Ordinal);
+
+            string previousFingerprint = null;
+            var hadStoredFingerprint = key != null &&
+                _lastFingerprintByView.TryGetValue(key, out previousFingerprint);
+
+            if (config.enabled && config.mutationDedupe && key != null)
             {
-                Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
+                var fingerprint = UISnapshotBuilder.fingerprint(snapshot);
+                if (isMutation && hadStoredFingerprint && previousFingerprint == fingerprint)
+                {
+                    // Mutation captures exist to document change; nothing changed
+                    // (e.g. a created element settled into an identical layout, or
+                    // the creation burst was undone inside the debounce window).
+                    Debug.Log($"[Telemetry] mutation capture skipped — '{snapshot.view?.name}' unchanged since last export ({snapshot.nodes.Count} nodes)");
+                    return;
+                }
+                _lastFingerprintByView[key] = fingerprint;
             }
+
+            if (!isMutation && key != null)
+            {
+                // A lifecycle capture is the opening shot of a visibility cycle —
+                // the mutation cap (and its warning latch) restart with it.
+                _mutationCapturesPerCycle.Remove(key);
+                _capWarnedViews.Remove(key);
+            }
+
+            // One capture per visibility cycle is guaranteed by the transitions /
+            // popup triggers themselves — no cross-cycle content dedupe here (the
+            // mutation-only dedupe above is scoped to a cycle exactly so the old
+            // 'view id + node count' starvation can't come back).
+            var path = await UISnapshotExporter.exportToFileAsync(snapshot);
+            if (path == null)
+            {
+                // The write failed — forget the just-stored fingerprint so the
+                // never-exported content is not deduped away on a later identical
+                // mutation capture.
+                if (config.enabled && config.mutationDedupe && key != null)
+                {
+                    if (hadStoredFingerprint)
+                    {
+                        _lastFingerprintByView[key] = previousFingerprint;
+                    }
+                    else
+                    {
+                        _lastFingerprintByView.Remove(key);
+                    }
+                }
+                return;
+            }
+
+            Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
         }
 
         private static bool hotkeyAllowed(TelemetryConfig config)

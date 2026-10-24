@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 using com.convalise.UnityMaterialSymbols;
 using TLab.UI.SDF;
@@ -27,8 +28,10 @@ namespace mdu.ui.telemetry.snapshot
         /// <summary>
         /// Captures <paramref name="root"/> (default: current active view) plus theme/app info.
         /// Returns null (with a warning) when there is nothing to capture.
+        /// <paramref name="source"/> is the trigger that asked for this capture
+        /// (see <see cref="UISnapshot.source"/>); null for manual captures.
         /// </summary>
-        public static UISnapshot build(IUI root = null)
+        public static UISnapshot build(IUI root = null, string source = null)
         {
             root ??= UI.views?.currentContext?.mainView;
             if (root == null || root.rectTransform == null)
@@ -52,12 +55,80 @@ namespace mdu.ui.telemetry.snapshot
                 app = buildAppInfo(root),
                 view = buildViewInfo(root),
                 theme = buildTheme(),
-                nodes = new List<SnapshotNode>()
+                nodes = new List<SnapshotNode>(),
+                source = source
             };
 
             var takenIds = new HashSet<string>();
             walk(root.rectTransform, null, 0, root, snapshot, takenIds);
             return snapshot;
+        }
+
+        /// <summary>
+        /// Cheap structural fingerprint of a snapshot's node tree: node count, id,
+        /// type, sibling position, active flag and rounded rects per node. Two
+        /// snapshots of the same view with equal fingerprints show the same set of
+        /// elements in the same place — the identity check behind mutation-capture
+        /// dedupe (resolver/anon ids are stable across captures of a pooled view
+        /// within one cycle, so a re-created identical element compares equal *and*
+        /// a different element compares different). CanvasGroup opacity and button
+        /// tints are deliberately excluded: mutation captures exist to document
+        /// structural change, not color twiddles that a lifecycle capture records.
+        /// </summary>
+        public static string fingerprint(UISnapshot snapshot)
+        {
+            if (snapshot == null)
+            {
+                return null;
+            }
+
+            var nodes = snapshot.nodes;
+            var count = nodes?.Count ?? 0;
+            var hash = new uint[] { 2166136261u }; // FNV-1a 32
+            Combine(hash, (uint)count);
+            Combine(hash, stableHash(snapshot.view?.id));
+            Combine(hash, stableHash(snapshot.view?.name));
+
+            if (nodes != null)
+            {
+                foreach (var node in nodes)
+                {
+                    Combine(hash, stableHash(node.id));
+                    Combine(hash, stableHash(node.type));
+                    Combine(hash, (uint)node.siblingIndex);
+                    Combine(hash, node.active ? 1u : 0u);
+                    var rect = node.rect;
+                    if (rect != null)
+                    {
+                        Combine(hash, (uint)Mathf.RoundToInt(rect.x * 10f));
+                        Combine(hash, (uint)Mathf.RoundToInt(rect.y * 10f));
+                        Combine(hash, (uint)Mathf.RoundToInt(rect.width * 10f));
+                        Combine(hash, (uint)Mathf.RoundToInt(rect.height * 10f));
+                    }
+                }
+            }
+
+            return hash[0].ToString("x8", CultureInfo.InvariantCulture);
+        }
+
+        private static void Combine(uint[] hash, uint value)
+        {
+            hash[0] = (hash[0] ^ value) * 16777619u;
+        }
+
+        private static uint stableHash(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return 0;
+            }
+
+            var h = 2166136261u;
+            for (var i = 0; i < value.Length; i++)
+            {
+                h = (h ^ value[i]) * 16777619u;
+            }
+            return h;
         }
 
         private static SnapshotAppInfo buildAppInfo(IUI root)

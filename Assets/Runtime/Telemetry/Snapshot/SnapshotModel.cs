@@ -21,6 +21,14 @@ namespace mdu.ui.telemetry.snapshot
         public SnapshotViewInfo view;
         public SnapshotTheme theme;
         public List<SnapshotNode> nodes;
+
+        /// <summary>
+        /// Why this snapshot was captured (the trigger source): "view-transition",
+        /// "popup-shown", "mutation", "hotkey", or the paced variants of these
+        /// ("...:queued"). Null on manual/debug captures before the schema grew
+        /// the field — consumers must treat null as "unspecified".
+        /// </summary>
+        public string source;
     }
 
     public class SnapshotAppInfo
