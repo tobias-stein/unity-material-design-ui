@@ -18,6 +18,36 @@ namespace mdu.ui
     public static class UILayout
     {
         /// <summary>
+        /// ADR-0006 dirt flag: true while something in the package may have left
+        /// layout stale since the last point the state was made current (the last
+        /// <see cref="forceNow"/>, or the capture that armed the gate). Marked by
+        /// every site that knowingly dirties layout — the package's own
+        /// <c>MarkLayoutForRebuild</c> call sites and the structural
+        /// create/remove raises the telemetry trigger layer subscribes to. Read
+        /// (and consumed by <see cref="forceNow"/>) by the capture-side layout
+        /// gate; a wrong "not dirty" result is self-healed by the telemetry
+        /// one-force recovery latch instead of here. Deliberately one coarse
+        /// bool, not a per-canvas query: UGUI's rebuild queue is internal (no
+        /// public "is anything queued" API) and reflecting on LayoutRebuilder's
+        /// registry is fragile under IL2CPP stripping.
+        /// </summary>
+        private static bool _dirty;
+
+        /// <summary>True when layout-affecting state changed since the last consume.</summary>
+        public static bool isDirty => _dirty;
+
+        /// <summary>
+        /// Marks layout stale — call wherever the package changes state that can
+        /// leave layout dirty (next to its own <c>LayoutRebuilder.MarkLayoutForRebuild</c>
+        /// calls) and wherever an observer of structural UI change wants the next
+        /// capture's gate to see the change.
+        /// </summary>
+        public static void markDirty()
+        {
+            _dirty = true;
+        }
+
+        /// <summary>
         /// Makes the layout of <paramref name="root"/>'s subtree current
         /// immediately, without waiting for the next canvas update.
         /// </summary>
@@ -27,6 +57,12 @@ namespace mdu.ui
             {
                 return;
             }
+
+            // ADR-0006: a force consumes the dirt it fixes — this call (and every
+            // queued UGUI update, via ForceUpdateCanvases which drains all
+            // canvases) leaves the layout state current, so the gate must not
+            // re-force on the same dirt afterwards.
+            _dirty = false;
 
             // Drains everything layout groups / ContentSizeFitters / text
             // components registered via MarkLayoutForRebuild (enable, dirty,

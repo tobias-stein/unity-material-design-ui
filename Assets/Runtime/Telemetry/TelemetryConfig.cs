@@ -3,6 +3,19 @@ using UnityEngine;
 
 namespace mdu.ui.telemetry
 {
+    /// <summary>
+    /// Snapshot storage format (ADR-0008): Binary = self-describing versioned 'MDS'
+    /// files (.mds, schema v3); Yaml = the legacy schema-v2 escape hatch, shippable
+    /// forever as the verbose debug path.
+    /// </summary>
+    public enum SnapshotFormat
+    {
+        Yaml,
+
+        /// <summary>Default — the v3 migration target.</summary>
+        Binary
+    }
+
     public enum TelemetryOutputLocation
     {
         /// <summary>Application.persistentDataPath (default, works on all platforms).</summary>
@@ -56,8 +69,36 @@ namespace mdu.ui.telemetry
         [Tooltip("gzip-compress snapshot files (.yaml.gz instead of .yaml, ~8-14x smaller " +
                  "(2026-10-24: measured 25KB->3KB median, 187KB->13KB on real captures)). " +
                  "Both viewers detect gzip by magic bytes and inflate transparently; YAML " +
-                 "debuggability is unchanged (gunzip any file to grep it).")]
+                 "debuggability is unchanged (gunzip any file to grep it). Applies to the " +
+                 "YAML escape hatch only — the binary format never compresses (it is the " +
+                 "format that beat gzip's ceiling, ADR-0008).")]
         public bool gzip = true;
+
+        [Header("Snapshot format (ADR-0007/0008/0009 — ONE migration)")]
+        [Tooltip("v3 storage format. Binary = the 'MDS' format (string table + varint + " +
+                 "columnar nodes, .mds files, no gzip) with the session-scoped theme " +
+                 "manifest (ADR-0007) and delta mutation chains (ADR-0009). Yaml is the " +
+                 "escape hatch: the untouched schema-v2 writer (.yaml[.gz]) for grep-able " +
+                 "debugging and diffing against production captures — never removed, " +
+                 "always readable by both viewers. Default follows ADR-0008's decision " +
+                 "('default Binary after a validation session'): confirm the golden parity " +
+                 "with a live capture before shipping.")]
+        public SnapshotFormat snapshotFormat = SnapshotFormat.Binary;
+
+        [Tooltip("When true (default), a mutation capture that resolves within an open " +
+                 "view cycle where an anchor export exists is written as a sparse " +
+                 "delta chain member instead of a full re-serialize (ADR-0009). Rollback " +
+                 "is exactly this line: false = v3 anchors only (ADR-0008 standalone); " +
+                 "cycle boundaries and lifecycle captures are unaffected. Requires " +
+                 "snapshotFormat = Binary.")]
+        public bool mutationDeltaEnabled = true;
+        [Tooltip("Suppress *Data fields whose value equals the struct's construction " +
+                 "default from the snapshot's per-node data dump (ADR-0005): the " +
+                 "colorRoles/textRole extraction stays complete even at default, so " +
+                 "node.data keeps only the fields that give the node its identity in " +
+                 "context. false restores the complete pre-ADR-0005 dump (every field " +
+                 "present) for diffing against production captures.")]
+        public bool dataDumpDefaults = true;
 
         [Header("Retention (0 = unlimited)")]
         [Tooltip("Delete oldest snapshots beyond this many files.")]
@@ -66,10 +107,23 @@ namespace mdu.ui.telemetry
         public float maxTotalMB = 50;
 
         [Header("Capture")]
-        [Tooltip("Run LayoutRebuildLayoutImmediate before walking the tree so rects are current.")]
-        public bool forceRebuildLayout = true;
+        [Tooltip("ADR-0006: when off (default), the pre-walk layout force is dirt-gated — it runs only when layout " +
+                 "became dirty since the last consumed state (structural mutation raises, UMDUI layout changes, the " +
+                 "view-show force), so settle-anchored captures almost never pay the LayoutRebuilder sweep. A capture " +
+                 "that skipped the force is verified against the viewer's geometryWarning check; on violation a " +
+                 "one-force recovery latch makes the next capture for that view force unconditionally (logged). " +
+                 "When on, force unconditionally ignoring the gate (debug escape hatch, pre-ADR-0006 behavior).")]
+        public bool forceRebuildLayout = false;
         [Tooltip("Skip pooled (inactive, recycled) UI elements and their subtrees.")]
         public bool skipPooled = true;
+
+        [Header("Capture timing diagnostics (ADR-0001)")]
+        [Tooltip("Log one '[Telemetry] capture timing' line per exported capture " +
+                 "(build/walk/serialize/encode+hash/write ms, node count, file size, " +
+                 "mutation debounce settle latency). Measurement gate for the telemetry " +
+                 "performance ADRs — diagnostics only, nothing enters the InfluxDB schema. " +
+                 "When off, the pipeline cost is a single null check, not a code path divergence.")]
+        public bool captureTimingEnabled = true;
 
         [Header("Popup views (dialogs, snackbars)")]
         [Tooltip("Emit view_open/view_close for popup-layer views (Dialog, Snackbar, …) " +
@@ -141,6 +195,15 @@ namespace mdu.ui.telemetry
         public float eventFlushInterval = 1f;
         [Tooltip("Delete oldest event files beyond this many (0 = unlimited). Safety cap for undelivered pending files.")]
         public int eventsMaxFiles = 100;
+        [Tooltip("Deliver up to this many oldest pending-*.lp files per InfluxDB request, " +
+                 "concatenated as line protocol (ADR-0004) — backlog draining costs ~N/this " +
+                 "many round trips instead of N. 1 = one file per request (old behavior). " +
+                 "File cadence is untouched: a live 1 s batch still poses a 1-point POST.")]
+        public int pendingCoalesce = 16;
+        [Tooltip("Byte budget for one coalesced InfluxDB request body; files beyond it wait " +
+                 "for the next request. Guards the InfluxDB write-size limit. A single file " +
+                 "over budget is still sent alone so it cannot stall the queue head.")]
+        public int pendingCoalesceMaxBytes = 512 * 1024;
 
         [Header("InfluxDB (v2 HTTP API)")]
         [Tooltip("Deliver events to InfluxDB as a write-ahead outbox: persisted to pending-*.lp first, " +

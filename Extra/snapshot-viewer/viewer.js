@@ -38,18 +38,51 @@ async function loadFile(file) {
   try {
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
-    let text;
+    let raw;
     if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
       const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
-      text = await new Response(stream).text();
-    } else {
-      text = new TextDecoder('utf-8').decode(buffer);
+      raw = await new Response(stream).text();
+      applySnapshot(window.jsyaml.load(raw), file.name);
+      return;
     }
-    applySnapshot(window.jsyaml.load(text), file.name);
+    if (render.hasMdsMagic && render.hasMdsMagic(bytes)) {
+      // MDS v3 binary (ADR-0008): anchors load directly; delta captures are a
+      // *chain* storage format — a single artifact has no base to replay
+      // (honest state, matching the telemetry viewer's unresolvable-chain rule).
+      const doc = render.decodeMdsBytes(bytes);
+      if (doc.contentMode === 'delta') {
+        setStatus(`⚠ ${file.name}: delta chain capture — load it with its session in the telemetry viewer`, 'warn');
+        return;
+      }
+      applySnapshot(docToRaw(doc), file.name);
+      // ADR-0007: a manifest-ref theme needs the session manifest artifact,
+      // which a standalone single-file load cannot resolve — the replica
+      // degrades (neutral palette) and says so instead of looking off.
+      if (doc.themeRef && !doc.theme) {
+        const note = 'theme carried by its session manifest — standalone load renders without the session palette';
+        if (!state.warning) setStatus(`⚠ ${note}`, 'warn');
+      }
+      return;
+    }
+    raw = new TextDecoder('utf-8').decode(buffer);
+    applySnapshot(window.jsyaml.load(raw), file.name);
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load ${file.name}: ${err.message}`, 'error');
   }
+}
+
+/** Maps the shared decoder's doc onto the raw-YAML shape applySnapshot consumes. */
+function docToRaw(doc) {
+  return {
+    schemaVersion: doc.schemaVersion,
+    timestampUtc: doc.timestampUtc,
+    app: doc.app ?? undefined,
+    view: doc.view ?? undefined,
+    theme: doc.theme ?? undefined,
+    source: doc.source ?? undefined,
+    nodes: doc.nodes ?? [],
+  };
 }
 
 /**

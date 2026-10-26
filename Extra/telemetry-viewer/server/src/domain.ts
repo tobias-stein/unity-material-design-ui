@@ -48,6 +48,13 @@ export interface RawEventFields {
   screen?: string;
   /** Capture trigger ("view-transition", "popup-shown", "mutation", …); missing on legacy data. */
   source?: string;
+  /** MDS content mode "anchor" | "delta" (ADR-0009); null for YAML exports and legacy points. */
+  mode?: string;
+  /** ADR-0007 theme manifest hash ("x8" hex); null when the theme rides inline or legacy. */
+  theme?: string;
+  /** ADR-0009 chain links: immediate base and chain root anchor (file hashes); null on anchors. */
+  base?: string;
+  anchor?: string;
 }
 
 export interface RawEvent {
@@ -135,6 +142,13 @@ export interface SnapshotLedgerEntry {
   nodes: number | null;
   width: number | null;
   height: number | null;
+  /** MDS content mode ("anchor" | "delta", ADR-0009); null for YAML/legacy. */
+  mode: string | null;
+  /** ADR-0007 theme manifest hash; null when inline or legacy. */
+  themeHash: string | null;
+  /** ADR-0009 chain links (null on anchors). */
+  baseHash: string | null;
+  anchorHash: string | null;
 }
 
 /** Projected session (light for lists, with `events`/`snapshots` for detail). */

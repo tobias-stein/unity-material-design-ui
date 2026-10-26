@@ -417,7 +417,11 @@ namespace mdu.ui.telemetry.events
                     screen = formatScreen(info.screenWidth, info.screenHeight),
                     owner = info.owner,
                     platform = info.platform,
-                    captureSource = info.source
+                    captureSource = info.source,
+                    snapshotMode = info.contentMode,
+                    snapshotThemeHash = info.themeHash,
+                    snapshotBaseHash = info.baseHash,
+                    snapshotAnchorHash = info.anchorHash
                 });
             }
             catch (Exception ex)

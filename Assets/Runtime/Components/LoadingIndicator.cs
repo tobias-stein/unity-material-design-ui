@@ -265,6 +265,7 @@ namespace mdu.ui
                                 _linearIndicatorRT.sizeDelta = new Vector2(_indicatorEnd, _linearIndicatorRT.sizeDelta.y);
                                 LayoutRebuilder.MarkLayoutForRebuild(_linearTrackRT);
                                 LayoutRebuilder.MarkLayoutForRebuild(_linearIndicatorRT);
+                                UILayout.markDirty(); // ADR-0006: arm the capture-side layout gate
                                 break;
                             case Shape.circular:
                                 _circularTrack.startAngle = _trackStart;
@@ -288,6 +289,7 @@ namespace mdu.ui
                                 _linearTrackRT.sizeDelta = new Vector2(_indicatorEnd, _linearIndicatorRT.sizeDelta.y);
                                 LayoutRebuilder.MarkLayoutForRebuild(_linearTrackRT);
                                 LayoutRebuilder.MarkLayoutForRebuild(_linearIndicatorRT);
+                                UILayout.markDirty(); // ADR-0006: arm the capture-side layout gate
                                 break;
                             case Shape.circular:
                                 _circularIndicator.startAngle = _trackStart;
@@ -310,6 +312,7 @@ namespace mdu.ui
                         _linearIndicatorRT.sizeDelta = new Vector2(_indicatorEnd, _linearIndicatorRT.sizeDelta.y);
                         LayoutRebuilder.MarkLayoutForRebuild(_linearTrackRT);
                         LayoutRebuilder.MarkLayoutForRebuild(_linearIndicatorRT);
+                        UILayout.markDirty(); // ADR-0006: arm the capture-side layout gate
                         break;
                     case Shape.circular:
                         _circularTrack.startAngle = _trackStart;

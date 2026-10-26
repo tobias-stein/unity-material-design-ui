@@ -18,6 +18,10 @@ namespace mdu.ui.telemetry.events
     /// run (startup directory scan), so an unreachable InfluxDB never loses
     /// events and the queue drains automatically when it comes back.
     ///
+    /// Backlog delivery coalesces up to <c>pendingCoalesce</c> oldest files
+    /// into that one body, bounded by a byte budget (ADR-0004) — file cadence
+    /// and failure semantics are unchanged.
+    ///
     /// Re-sending an already-acknowledged file (crash between 204 and delete) is
     /// harmless: identical measurement + tags + timestamp points overwrite in
     /// InfluxDB (at-least-once, effectively idempotent).
@@ -131,12 +135,32 @@ namespace mdu.ui.telemetry.events
             _pendingFiles.RemoveAll(p => !File.Exists(p));
         }
 
+        /// <summary>
+        /// Sends one request carrying up to <c>pendingCoalesce</c> pending files
+        /// (oldest first, bounded by a byte budget) concatenated as line
+        /// protocol, and deletes the coalesced files only after a 2xx response.
+        /// On failure every file in the batch stays queued and the backoff
+        /// timer applies once per attempt — the retry unit is the batch.
+        /// </summary>
         private async UniTaskVoid sendOldestAsync()
         {
-            var path = _pendingFiles[0];
-            if (!File.Exists(path))
+            var body = new StringBuilder();
+            var batch = new List<string>();
+
+            try
             {
-                _pendingFiles.RemoveAt(0);
+                coalesceBatch(body, batch);
+            }
+            catch (Exception ex)
+            {
+                // Keep every file and back off — an unreadable file must not
+                // retry per frame (same profile as the old read-inside-try).
+                onFailure(ex.Message);
+                return;
+            }
+
+            if (batch.Count == 0)
+            {
                 return;
             }
 
@@ -144,14 +168,6 @@ namespace mdu.ui.telemetry.events
             try
             {
                 var config = Telemetry.config;
-                var payload = File.ReadAllText(path, Encoding.UTF8);
-
-                if (string.IsNullOrWhiteSpace(payload))
-                {
-                    File.Delete(path);
-                    _pendingFiles.RemoveAt(0);
-                    return;
-                }
 
                 var url = $"{config.influxUrl.TrimEnd('/')}/api/v2/write" +
                           $"?org={Uri.EscapeDataString(config.influxOrg)}" +
@@ -160,7 +176,7 @@ namespace mdu.ui.telemetry.events
 
                 using (var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST))
                 {
-                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(payload));
+                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body.ToString()));
                     request.downloadHandler = new DownloadHandlerBuffer();
                     request.SetRequestHeader("Authorization", "Token " + config.influxToken);
                     request.SetRequestHeader("Content-Type", "text/plain; charset=utf-8");
@@ -176,9 +192,16 @@ namespace mdu.ui.telemetry.events
                     }
                 }
 
-                // Acknowledged — remove the offline copy.
-                File.Delete(path);
-                _pendingFiles.RemoveAt(0);
+                // Acknowledged — remove the offline copies, in order. Files may
+                // have been pruned away meanwhile; File.Delete ignores missing
+                // files, so the queue entry alone would be cleaned up anyway.
+                var acked = new HashSet<string>(batch);
+                foreach (var path in batch)
+                {
+                    File.Delete(path);
+                }
+
+                _pendingFiles.RemoveAll(acked.Contains);
 
                 _backoffSeconds = 0f;
                 _nextAttemptRealtime = 0f;
@@ -195,6 +218,66 @@ namespace mdu.ui.telemetry.events
             finally
             {
                 _inFlight = false;
+            }
+        }
+
+        /// <summary>
+        /// Concatenates the oldest pending files into one line-protocol request
+        /// body — up to <c>TelemetryConfig.pendingCoalesce</c> files or
+        /// <c>pendingCoalesceMaxBytes</c> bytes, whichever is exhausted first
+        /// (ADR-0004). Line protocol is line-delimited, so joining files needs
+        /// no re-serialization; at least one file is always taken so a single
+        /// oversized file cannot stall the queue head. Files that vanished
+        /// (external prune) or hold no usable lines are dropped from the queue
+        /// like before; paths that went into the body are collected in
+        /// <paramref name="paths"/> in queue order.
+        /// </summary>
+        private void coalesceBatch(StringBuilder body, List<string> paths)
+        {
+            var config = Telemetry.config;
+            var maxFiles = Mathf.Max(1, config.pendingCoalesce);
+            var budget = Mathf.Max(1, config.pendingCoalesceMaxBytes);
+            var bodyBytes = 0;
+
+            for (var i = 0; i < _pendingFiles.Count; i++)
+            {
+                if (paths.Count >= maxFiles)
+                {
+                    break;
+                }
+
+                var path = _pendingFiles[i];
+                if (!File.Exists(path))
+                {
+                    _pendingFiles.RemoveAt(i--);
+                    continue;
+                }
+
+                var payload = File.ReadAllText(path, Encoding.UTF8);
+                if (string.IsNullOrWhiteSpace(payload))
+                {
+                    File.Delete(path);
+                    _pendingFiles.RemoveAt(i--);
+                    continue;
+                }
+
+                var payloadBytes = Encoding.UTF8.GetByteCount(payload);
+                if (paths.Count > 0 && bodyBytes + payloadBytes > budget)
+                {
+                    break; // budget full — this and later files ride the next request
+                }
+
+                // Defensive: a file cut off mid-write (crash) may lack its
+                // final newline; well-formed files already end with one, so
+                // the joined body is byte-for-byte the queued lines.
+                body.Append(payload);
+                if (payload[payload.Length - 1] != '\n')
+                {
+                    body.Append('\n');
+                }
+
+                bodyBytes += payloadBytes;
+                paths.Add(path);
             }
         }
 

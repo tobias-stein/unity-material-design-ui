@@ -185,6 +185,7 @@ namespace mdu.ui
                 }
 
                 LayoutRebuilder.MarkLayoutForRebuild(rectTransform);
+                UILayout.markDirty(); // ADR-0006: arm the capture-side layout gate
             });
             binder.bind(data => data.shape, value =>
             {

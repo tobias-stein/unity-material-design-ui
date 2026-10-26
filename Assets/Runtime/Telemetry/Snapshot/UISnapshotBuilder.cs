@@ -2,6 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+// Type alias instead of `using System.Diagnostics;` — that namespace carries its own
+// Debug class, which would make UnityEngine.Debug ambiguous in this file.
+using Stopwatch = System.Diagnostics.Stopwatch;
 using System.Reflection;
 using com.convalise.UnityMaterialSymbols;
 using TLab.UI.SDF;
@@ -21,6 +24,15 @@ namespace mdu.ui.telemetry.snapshot
     {
         private static readonly Dictionary<Type, MemberInfo> _binderMembers = new Dictionary<Type, MemberInfo>();
         private static readonly Vector3[] _cornerBuffer = new Vector3[4];
+
+        /// <summary>
+        /// ADR-0002 pooled sweep buffer — one native walk of each node's component
+        /// list replaces the five per-type <c>GetComponent</c> probes that used to
+        /// traverse the same list independently. Reused across captures: zero
+        /// allocations once warm. Cleared before every fill (rule 4) and only ever
+        /// filled on the main-thread capture walk.
+        /// </summary>
+        private static readonly List<Component> _componentBuffer = new List<Component>();
 
         // Theme caching: the serialized theme block is identical for every capture of a
         // session until a setting mutates (dark toggle, device type, seed, fonts, scheme
@@ -52,12 +64,37 @@ namespace mdu.ui.telemetry.snapshot
         private const float MIN_VISIBLE_ALPHA = 0.01f;
 
         /// <summary>
+        /// The formatted hash (<c>"x8"</c>) of the currently cached theme — the same
+        /// value <see cref="buildTheme"/> validated before reusing the cache. Consumed
+        /// by the v3 format's session theme manifest (ADR-0007): snapshot files carry
+        /// {id: hash} and the manifest maps hash → SnapshotTheme. Null when no
+        /// settings/theme exist. Cheap: the per-capture hash walk already happened in
+        /// <see cref="buildTheme"/>, this only formats the stored result.
+        /// </summary>
+        public static string currentThemeHashHex()
+        {
+            return _cachedTheme == null ? null : UISnapshotBinaryWriter.FnvHex(_cachedThemeHash);
+        }
+
+        /// <summary>The cached theme content for the current hash (the manifest entry's payload); null when no theme exists.</summary>
+        public static SnapshotTheme currentTheme()
+        {
+            return _cachedTheme;
+        }
+
+        /// <summary>
         /// Captures <paramref name="root"/> (default: current active view) plus theme/app info.
         /// Returns null (with a warning) when there is nothing to capture.
         /// <paramref name="source"/> is the trigger that asked for this capture
         /// (see <see cref="UISnapshot.source"/>); null for manual captures.
+        /// A non-null <paramref name="timing"/> arms the ADR-0001 instrumentation:
+        /// total build ms + walk ms/node count (walk excludes the layout force).
+        /// The pre-walk layout force is dirt-gated (ADR-0006, see
+        /// <see cref="UILayoutGate"/>) — it runs only when the config escape-hatch
+        /// is on, layout became dirty since the last consumed state, or the view's
+        /// recovery latch is armed; a gate-skipped capture is verified afterwards.
         /// </summary>
-        public static UISnapshot build(IUI root = null, string source = null)
+        public static UISnapshot build(IUI root = null, string source = null, CaptureTiming timing = null)
         {
             root ??= UI.views?.currentContext?.mainView;
             if (root == null || root.rectTransform == null)
@@ -66,12 +103,34 @@ namespace mdu.ui.telemetry.snapshot
                 return null;
             }
 
-            if (Telemetry.config.forceRebuildLayout)
+            // ADR-0001: one Stopwatch per (enabled) capture measures the whole build
+            // and, as a delta started right before the tree visit, the walk alone —
+            // so layout force, theme-hash walk and app info stay visible as the
+            // build-walk remainder. Null when the kill-switch is off.
+            var stopwatch = timing != null ? Stopwatch.StartNew() : null;
+
+            // ADR-0006: dirt-gated layout force. The per-root LayoutRebuilder
+            // sweep only buys anything when layout is actually stale — at
+            // settle-anchored capture points Unity has almost always applied
+            // layout naturally, so the force runs only on fresh dirt (mutation
+            // raises / UMDUI layout changes mark it), when the
+            // forceRebuildLayout escape-hatch demands it, or when the view's
+            // one-force recovery latch is armed. The flag is local so the
+            // verification below knows whether to run regardless of the timing
+            // kill-switch. The gate-skipped capture is verified after the walk
+            // (UILayoutGate.verify) so a wrong gate never fails silently.
+            var forceLayout = UILayoutGate.shouldForce(root);
+            if (forceLayout)
             {
                 // ForceRebuildLayoutImmediate on the view root is a no-op (Unity skips
                 // subtrees whose root has no ILayoutController), so flush the canvas
-                // queues and rebuild the real layout roots instead.
+                // queues and rebuild the real layout roots instead. The force
+                // consumes the dirt flag (UILayout.forceNow).
                 UILayout.forceNow(root.rectTransform);
+            }
+            if (timing != null)
+            {
+                timing.layoutForced = forceLayout;
             }
 
             var snapshot = new UISnapshot
@@ -86,8 +145,91 @@ namespace mdu.ui.telemetry.snapshot
             };
 
             var takenIds = new HashSet<string>();
-            walk(root.rectTransform, null, 0, root, snapshot, takenIds);
+            var walkStart = stopwatch != null ? CaptureTiming.ElapsedMs(stopwatch) : 0f;
+            // The walk measures text metrics the live layout may never have asked
+            // this text object for (fillResolved reads TMP_Text.preferredWidth for
+            // textWidth). TMP logs its missing-glyph warning on every measure pass,
+            // so an un-suppressed capture manufactures warnings the running UI never
+            // emits. Scoped exactly to the walk — synchronous on the main thread,
+            // no raisers/binders run inside — and restored even if it throws.
+            var warningsSuppressed = suppressTmpWarnings();
+            try
+            {
+                walk(root.rectTransform, null, 0, root, snapshot, takenIds);
+            }
+            finally
+            {
+                if (warningsSuppressed)
+                {
+                    restoreTmpWarnings();
+                }
+            }
+
+            if (timing != null)
+            {
+                timing.walkMs = CaptureTiming.ElapsedMs(stopwatch) - walkStart;
+                timing.nodeCount = snapshot.nodes.Count;
+                timing.buildMs = CaptureTiming.ElapsedMs(stopwatch);
+            }
+
+            // ADR-0006 escalation rope: a capture that skipped the force (and only
+            // those — a forced one has current rects by construction) is checked
+            // against the viewer's geometryWarning signature here, before export,
+            // so a wrong "not dirty" arms the one-force recovery latch for this
+            // view's next capture instead of rotting silently.
+            if (!forceLayout)
+            {
+                UILayoutGate.verify(snapshot, root);
+            }
+
             return snapshot;
+        }
+
+        // TMP_Settings.warningsDisabled is get-only in this ugui TMP port (readable
+        // from the serialized TMP Settings asset, no setter) — capture needs it off
+        // for the walk's measure passes, so the toggle goes through the private
+        // backing field, cached once. If reflection is unavailable (strip-the-fields
+        // IL2CPP builds), the suppression silently no-ops and TMP warnings stay on —
+        // the capture is correct either way, its logs just get noisier.
+        private static FieldInfo _tmpWarningsDisabledField;
+
+        /// <summary>Previous value that restoreTmpWarnings writes back.</summary>
+        private static bool _tmpWarningsPreviousValue;
+
+        /// <summary>
+        /// Turns TMP's warning output off for the capture walk. Returns false when
+        /// the backing field cannot be reached (leave everything untouched then).
+        /// </summary>
+        private static bool suppressTmpWarnings()
+        {
+            if (_tmpWarningsDisabledField == null)
+            {
+                _tmpWarningsDisabledField = typeof(TMP_Settings)
+                    .GetField("m_warningsDisabled", BindingFlags.Instance | BindingFlags.NonPublic);
+            }
+            if (_tmpWarningsDisabledField == null)
+            {
+                return false;
+            }
+            var settings = TMP_Settings.instance;
+            if (settings == null)
+            {
+                return false;
+            }
+            _tmpWarningsPreviousValue = (bool)_tmpWarningsDisabledField.GetValue(settings);
+            _tmpWarningsDisabledField.SetValue(settings, true);
+            return true;
+        }
+
+        /// <summary>Restores the value suppressTmpWarnings stenciled. Pair it (guard with its bool).</summary>
+        private static void restoreTmpWarnings()
+        {
+            var settings = TMP_Settings.instance;
+            if (settings == null || _tmpWarningsDisabledField == null)
+            {
+                return;
+            }
+            _tmpWarningsDisabledField.SetValue(settings, _tmpWarningsPreviousValue);
         }
 
         /// <summary>
@@ -102,6 +244,12 @@ namespace mdu.ui.telemetry.snapshot
         /// structural change, not color twiddles that a lifecycle capture records.
         /// </summary>
         public static string fingerprint(UISnapshot snapshot)
+        {
+            return fingerprintUInt(snapshot)?.ToString("x8", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>u32 form of <see cref="fingerprint"/> — the delta file carries the raw value (same bits, no hex).</summary>
+        public static uint? fingerprintUInt(UISnapshot snapshot)
         {
             if (snapshot == null)
             {
@@ -134,7 +282,7 @@ namespace mdu.ui.telemetry.snapshot
                 }
             }
 
-            return hash[0].ToString("x8", CultureInfo.InvariantCulture);
+            return hash[0];
         }
 
         private static void Combine(uint[] hash, uint value)
@@ -399,12 +547,37 @@ namespace mdu.ui.telemetry.snapshot
             fillResolved(go, node);
         }
 
+        /// <summary>
+        /// ADR-0003 intern table for anonymous ids. <c>resolveId</c> composes
+        /// <c>anon:{parentId}/{siblingIndex}</c> on every anonymous node of every
+        /// capture; captures of a pooled view cycle re-walk the same shapes over and
+        /// over, so the same (parent fragment, siblingIndex) pair recurs across
+        /// captures ("once per pair rather than once per node capture"). Keyed by
+        /// immutable inputs — a parent fragment string and a sibling index — of
+        /// which the composed id is a pure function, so a cached entry can never go
+        /// stale (no Unity object lifetime involved). Write-once, never evicted;
+        /// bounded by the distinct tree shapes the app has ever captured, and safe
+        /// as a static because the editor domain reload rebuilds it lazily.
+        /// </summary>
+        private static readonly Dictionary<(string fragment, int siblingIndex), string> _anonIds =
+            new Dictionary<(string fragment, int siblingIndex), string>();
+
         private static string resolveId(IUI iui, string parentId, int siblingIndex, HashSet<string> takenIds)
         {
             var id = iui?.id;
             if (string.IsNullOrEmpty(id))
             {
-                return $"anon:{parentId ?? "root"}/{siblingIndex}";
+                // ADR-0003: one dictionary lookup in the walk's hot path — the
+                // fragment is normalized exactly like the interpolation below
+                // used to ("anon:{parentId ?? "root"}/{siblingIndex}"), only the
+                // constructed instance is shared instead of rebuilt per capture.
+                var fragment = parentId ?? "root";
+                if (!_anonIds.TryGetValue((fragment, siblingIndex), out var anon))
+                {
+                    anon = $"anon:{fragment}/{siblingIndex}";
+                    _anonIds[(fragment, siblingIndex)] = anon;
+                }
+                return anon;
             }
 
             if (!takenIds.Add(id))
@@ -503,6 +676,16 @@ namespace mdu.ui.telemetry.snapshot
         {
             public FieldInfo[] fields;          // public instance fields (the expected shape)
             public PropertyInfo[] properties;   // fallback when a Data struct uses properties
+
+            /// <summary>
+            /// ADR-0005: construction default of every member, built once per Type
+            /// alongside the member scan (one <c>Activator.CreateInstance(dataType)</c>
+            /// record read through the same cached arrays above). Null when the record
+            /// could not be constructed (no parameterless ctor) — the full dump then
+            /// stays intact for this Type.
+            /// </summary>
+            public object[] fieldDefaults;
+            public object[] propertyDefaults;
         }
 
         private static readonly Dictionary<Type, DataMembers> _dataMembers = new Dictionary<Type, DataMembers>();
@@ -527,6 +710,37 @@ namespace mdu.ui.telemetry.snapshot
                     properties = usable.ToArray();
                 }
                 members = new DataMembers { fields = fields, properties = properties };
+
+                // ADR-0005: capture the construction-default record once per Type —
+                // the values live for one editor domain (never persisted across
+                // sessions), which is the granularity the ADR mandates. A member
+                // whose default read throws just loses its suppression copy; a Type
+                // without a usable parameterless ctor keeps both null entirely.
+                try
+                {
+                    var defaultRecord = Activator.CreateInstance(type);
+                    members.fieldDefaults = new object[fields.Length];
+                    for (int i = 0; i < fields.Length; i++)
+                    {
+                        try { members.fieldDefaults[i] = fields[i].GetValue(defaultRecord); }
+                        catch { members.fieldDefaults[i] = null; }
+                    }
+                    if (properties != null)
+                    {
+                        members.propertyDefaults = new object[properties.Length];
+                        for (int i = 0; i < properties.Length; i++)
+                        {
+                            try { members.propertyDefaults[i] = properties[i].GetValue(defaultRecord); }
+                            catch { members.propertyDefaults[i] = null; }
+                        }
+                    }
+                }
+                catch
+                {
+                    members.fieldDefaults = null;
+                    members.propertyDefaults = null;
+                }
+
                 _dataMembers[type] = members;
             }
 
@@ -549,8 +763,19 @@ namespace mdu.ui.telemetry.snapshot
             if (members.fields.Length > 0)
             {
                 node.data = new Dictionary<string, object>();
-                foreach (var field in members.fields)
+                var fields = members.fields;
+                var fieldDefaults = members.fieldDefaults;
+                // ADR-0005: suppress fields whose value equals the Data struct's
+                // construction default — they are gzip-predictable bytes and pure
+                // per-row noise, and the skip happens *before* toPlain so the plain
+                // object is never even built for a default field. The role extractions
+                // above are deliberately not suppressed: colorRoles/textRole are the
+                // mapping layer's semantic keys and stay complete even at default.
+                // dataDumpDefaults = false is the kill-switch for the complete dump.
+                var suppressDefaults = Telemetry.config.dataDumpDefaults && fieldDefaults != null;
+                for (int i = 0; i < fields.Length; i++)
                 {
+                    var field = fields[i];
                     object value;
                     try { value = field.GetValue(boxed); }
                     catch { continue; }
@@ -565,6 +790,11 @@ namespace mdu.ui.telemetry.snapshot
                         textRole = value.ToString();
                     }
 
+                    if (suppressDefaults && object.Equals(value, fieldDefaults[i]))
+                    {
+                        continue;
+                    }
+
                     var plain = toPlain(value, 3);
                     if (plain != null)
                     {
@@ -576,17 +806,19 @@ namespace mdu.ui.telemetry.snapshot
             {
                 // Data structs are expected to use public fields; fall back to public
                 // properties so a future refactor doesn't silently drop state.
+                // Same ADR-0005 suppression as the field branch above; the role
+                // extractions stay complete (deliberately not suppressed).
+                var properties = members.properties;
+                var propertyDefaults = members.propertyDefaults;
                 node.data = new Dictionary<string, object>();
-                foreach (var property in members.properties)
+                var suppressDefaults = Telemetry.config.dataDumpDefaults && propertyDefaults != null;
+                for (int i = 0; i < properties.Length; i++)
                 {
+                    var property = properties[i];
                     object value;
                     try { value = property.GetValue(boxed); }
                     catch { continue; }
-                    var plain = toPlain(value, 3);
-                    if (plain != null)
-                    {
-                        node.data[property.Name] = plain;
-                    }
+
                     if (property.PropertyType == typeof(UISettings.ColorRole))
                     {
                         colorRoles ??= new Dictionary<string, string>();
@@ -595,6 +827,17 @@ namespace mdu.ui.telemetry.snapshot
                     else if (property.PropertyType == typeof(UISettings.TextRole) && textRole == null && value != null)
                     {
                         textRole = value.ToString();
+                    }
+
+                    if (suppressDefaults && object.Equals(value, propertyDefaults[i]))
+                    {
+                        continue;
+                    }
+
+                    var plain = toPlain(value, 3);
+                    if (plain != null)
+                    {
+                        node.data[property.Name] = plain;
                     }
                 }
             }
@@ -607,12 +850,48 @@ namespace mdu.ui.telemetry.snapshot
             }
         }
 
+        /// <summary>
+        /// Single pooled native sweep replacing the five per-node component probes
+        /// (ADR-0002). Each old <c>GetComponent&lt;T&gt;()</c> was its own native
+        /// traversal of the *same* component list, so a node paid ~5 lookups where
+        /// one suffices: <see cref="GameObject.GetComponents(Type, System.Collections.Generic.List{Component})"/>
+        /// sweeps the list once into the pooled <see cref="_componentBuffer"/>, and
+        /// the flat switch below dispatches on the swept components. The buffer is
+        /// re-cleared per probe (not just reused) so a reentrant call can never see
+        /// stale entries. Semantics are preserved exactly: "first hit per type wins"
+        /// (the first match in component-list order is what GetComponent returned,
+        /// later duplicates are ignored — a cone of two SDF quads resolves the
+        /// first), and the property fill below runs in the original probe order so
+        /// mixed nodes (quad *and* circle) keep the circle-last-writer behavior for
+        /// the shared fill/outline fields. Only the five probed types are honored —
+        /// no behavioral expansion to other component kinds.
+        /// </summary>
         private static void fillResolved(GameObject go, SnapshotNode node)
         {
             var resolved = node.resolved ??= new SnapshotResolved();
             bool any = false;
 
-            var tmp = go.GetComponent<TMP_Text>();
+            _componentBuffer.Clear();
+            go.GetComponents(_componentBuffer);
+
+            TMP_Text tmp = null;
+            Image image = null;
+            CanvasGroup canvasGroup = null;
+            SDFQuad sdfQuad = null;
+            SDFCircle circle = null;
+
+            foreach (var component in _componentBuffer)
+            {
+                switch (component)
+                {
+                    case TMP_Text hit when tmp == null: tmp = hit; break;
+                    case Image hit when image == null: image = hit; break;
+                    case CanvasGroup hit when canvasGroup == null: canvasGroup = hit; break;
+                    case SDFQuad hit when sdfQuad == null: sdfQuad = hit; break;
+                    case SDFCircle hit when circle == null: circle = hit; break;
+                }
+            }
+
             if (tmp != null)
             {
                 resolved.text = tmp.text;
@@ -634,29 +913,25 @@ namespace mdu.ui.telemetry.snapshot
                 any = true;
             }
 
-            var image = go.GetComponent<Image>();
             if (image != null)
             {
                 resolved.backgroundColor = toHex(image.color * image.canvasRenderer.GetColor());
                 any = true;
             }
 
-            var canvasGroup = go.GetComponent<CanvasGroup>();
             if (canvasGroup != null)
             {
                 resolved.opacity = round(canvasGroup.alpha);
                 any = true;
             }
 
-            var sdf = go.GetComponent<SDFQuad>();
-            if (sdf != null)
+            if (sdfQuad != null)
             {
-                resolved.cornerRadius = round(sdf.radius);
-                fillSdfColors(sdf, resolved);
+                resolved.cornerRadius = round(sdfQuad.radius);
+                fillSdfColors(sdfQuad, resolved);
                 any = true;
             }
 
-            var circle = go.GetComponent<SDFCircle>();
             if (circle != null)
             {
                 fillSdfColors(circle, resolved);
@@ -887,15 +1162,35 @@ namespace mdu.ui.telemetry.snapshot
             };
         }
 
+        /// <summary>
+        /// ADR-0003 cache of <see cref="friendlyTypeName"/> results keyed by the
+        /// element's CLR type: the name slicing (<c>`</c>-arity strip) plus the
+        /// namespace concat ran per node per capture, while the result is a pure
+        /// function of the compile-time-stable <see cref="Type"/> and the distinct
+        /// component set of an app is small (~30–50 strings). Write-once, never
+        /// evicted — structurally the same table as <see cref="_dataMembers"/> /
+        /// <c>_binderMembers</c> (same pattern, same lifetime, one more cache):
+        /// safe as a static because the editor domain reload rebuilds it lazily,
+        /// and stale-cache correctness cannot apply (immutable input key).
+        /// </summary>
+        private static readonly Dictionary<Type, string> _friendlyTypeNames = new Dictionary<Type, string>();
+
         private static string friendlyTypeName(Type type)
         {
+            if (_friendlyTypeNames.TryGetValue(type, out var friendly))
+            {
+                return friendly;
+            }
+
             var name = type.Name;
             var backtick = name.IndexOf('`');
             if (backtick >= 0)
             {
                 name = name.Substring(0, backtick);
             }
-            return string.IsNullOrEmpty(type.Namespace) ? name : $"{type.Namespace}.{name}";
+            friendly = string.IsNullOrEmpty(type.Namespace) ? name : $"{type.Namespace}.{name}";
+            _friendlyTypeNames[type] = friendly;
+            return friendly;
         }
 
         private static string cleanName(string name)

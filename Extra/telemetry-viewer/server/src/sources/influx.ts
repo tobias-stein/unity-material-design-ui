@@ -366,6 +366,10 @@ function applyFieldValue(fields: RawEventFields, field: string, rawValue: unknow
     case "platform": fields.platform = String(rawValue); break;
     case "screen": fields.screen = String(rawValue); break;
     case "source": fields.source = String(rawValue); break;
+    case "mode": fields.mode = String(rawValue); break;
+    case "theme": fields.theme = String(rawValue); break;
+    case "base": fields.base = String(rawValue); break;
+    case "anchor": fields.anchor = String(rawValue); break;
     default: break;
   }
 }

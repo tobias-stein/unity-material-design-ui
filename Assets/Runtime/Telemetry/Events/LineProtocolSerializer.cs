@@ -89,6 +89,12 @@ namespace mdu.ui.telemetry.events
             hasField = appendField(sb, hasField, "platform", e.platform);
             hasField = appendField(sb, hasField, "screen", e.screen);
             hasField = appendField(sb, hasField, "source", e.captureSource);
+            // ADR-0007/0009: format-migration joins. All optional (null for YAML
+            // exports and legacy points — the parser tolerates their absence).
+            hasField = appendField(sb, hasField, "mode", e.snapshotMode);
+            hasField = appendField(sb, hasField, "theme", e.snapshotThemeHash);
+            hasField = appendField(sb, hasField, "base", e.snapshotBaseHash);
+            hasField = appendField(sb, hasField, "anchor", e.snapshotAnchorHash);
 
             sb.Append(' ').Append(e.timestampNs);
             return sb.ToString();

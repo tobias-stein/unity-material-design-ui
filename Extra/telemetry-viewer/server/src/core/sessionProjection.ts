@@ -207,6 +207,10 @@ export function projectSessions(events: readonly RawEvent[], hooks: ProjectionHo
         nodes: event.fields.nodes ?? null,
         width: event.fields.width ?? null,
         height: event.fields.height ?? null,
+        mode: event.fields.mode ?? null,
+        themeHash: event.fields.theme ?? null,
+        baseHash: event.fields.base ?? null,
+        anchorHash: event.fields.anchor ?? null,
       });
       // Earliest ledger point wins: owner info is metadata, not per-shot data.
       acc.owner = acc.owner ?? event.fields.owner ?? null;

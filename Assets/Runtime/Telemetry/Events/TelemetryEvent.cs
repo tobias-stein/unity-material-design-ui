@@ -112,6 +112,21 @@ namespace mdu.ui.telemetry.events
         /// the runtime carried it in the snapshot).
         /// </summary>
         public string captureSource;
+
+        // ---------------------------------------------------------------
+        // ADR-0007/0009 format-migration ledger additions (all optional —
+        // null for YAML-escape-hatch exports and legacy points alike).
+        // ---------------------------------------------------------------
+
+        /// <summary>"anchor" | "delta" (MDS contentMode); null for the YAML writer.</summary>
+        public string snapshotMode;
+
+        /// <summary>Theme manifest hash the snapshot's theme is resolvable through ({"x8"} hex); null when inline.</summary>
+        public string snapshotThemeHash;
+
+        /// <summary>Chain-links for delta captures: fileHash of the diff base (immediate previous chain member) and the chain root anchor. Null on anchors.</summary>
+        public string snapshotBaseHash;
+        public string snapshotAnchorHash;
     }
 
     /// <summary>
@@ -136,5 +151,15 @@ namespace mdu.ui.telemetry.events
 
         /// <summary>Why the snapshot was captured (see TelemetryEvent.captureSource).</summary>
         public string source;
+
+        /// <summary>"anchor" | "delta" (see TelemetryEvent.snapshotMode); null for the YAML escape hatch.</summary>
+        public string contentMode;
+
+        /// <summary>Theme manifest hash (ADR-0007) this file's theme resolves through; null when inline.</summary>
+        public string themeHash;
+
+        /// <summary>Delta chain links (ADR-0009); null on anchors.</summary>
+        public string baseHash;
+        public string anchorHash;
     }
 }

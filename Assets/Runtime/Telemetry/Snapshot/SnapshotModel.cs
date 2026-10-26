@@ -13,7 +13,19 @@ namespace mdu.ui.telemetry.snapshot
     /// </summary>
     public class UISnapshot
     {
+        /// <summary>
+        /// Schema the YAML escape hatch serializes (<see cref="TelemetryConfig.snapshotFormat"/>=Yaml).
+        /// Fixed — the YAML writer is the legacy debug path, byte-compatible forever.
+        /// </summary>
         public const int SCHEMA_VERSION = 2;
+
+        /// <summary>
+        /// Schema of the binary format ("MDS", ADR-0008: varint + string table + columnar-leaning
+        /// node stream + ADR-0007 session theme refs + ADR-0009 delta chains). The YAML schema
+        /// intentionally stays at 2 — the migration is one versioned format change from v2-YAML
+        /// (and gzip-of-it) to v3-binary, never a YAML bump.
+        /// </summary>
+        public const int BINARY_SCHEMA_VERSION = 3;
 
         public int schemaVersion;
         public string timestampUtc;
@@ -181,5 +193,67 @@ namespace mdu.ui.telemetry.snapshot
         public float? outlineWidth;                    // SDF outline width (unity units); null when no outline
         public float? opacity;                         // CanvasGroup alpha; null when no CanvasGroup
         public float? cornerRadius;                    // SDFQuad radius; null when no SDFQuad
+    }
+
+    // ---------------------------------------------------------------------------
+    // ADR-0009: delta mutation captures (chain format on top of the v3 binary one).
+    // A delta is a *storage* format artifact — the viewer/server materializes whole
+    // trees; every existing consumer keeps dealing in whole snapshots only.
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// One delta capture's content: the sparse diff between the chain state
+    /// (the last *exported* capture of the view's open cycle) and the freshly
+    /// walked tree. Serialized by <see cref="UISnapshotBinaryWriter"/>
+    /// (contentMode=delta); never carried in the POCO <see cref="UISnapshot"/>.
+    /// </summary>
+    public class SnapshotDelta
+    {
+        /// <summary>SHA-256 hex of the file this delta's diffs were computed against —
+        /// the previous chain member (anchor or earlier delta), the immediate parent,
+        /// not only the chain root (that is <see cref="anchorHash"/>).</summary>
+        public string baseHash;
+
+        /// <summary>Ancestor file hashes of this chain segment, anchor first, self excluded.
+        /// The full segment rides along so a consumer never needs ledger resolvability to walk the chain (ADR-0008 principle 4: "parse.ts gains a magic sniff ... same ParsedSnapshot" — chain files must stay loadable by the store alone).</summary>
+        public List<string> bases;
+
+        /// <summary>Post-delta (materialized) tree node count — the ledger's nodeCount stays honest.</summary>
+        public int nodeCount;
+
+        /// <summary>FNV-1a fingerprint over the materialized post-delta tree (same value
+        /// <see cref="UISnapshotBuilder.fingerprint"/> computes; kept as the u32 form for the file).</summary>
+        public uint fingerprint;
+
+        public List<string> removedIds;
+        /// <summary>Full node payloads (same encoding as anchor nodes, patch flavor: with parent ref).</summary>
+        public List<SnapshotNode> added;
+        /// <summary>Nodes whose any tracked payload field changed — re-encoded whole (id → identity).</summary>
+        public List<SnapshotNode> changed;
+
+        /// <summary>Zero-alloc-ish diff, so an empty delta is impossible by construction.</summary>
+        public bool isEmpty => (removedIds?.Count ?? 0) == 0 && (added?.Count ?? 0) == 0 && (changed?.Count ?? 0) == 0;
+    }
+
+    /// <summary>
+    /// Per-view *cycle* chain state (the ADR-0009 "stateful storage"): what the
+    /// runtime holds between the anchor capture of a view's open cycle and the
+    /// cycle end. Append-only from the trigger loop's point of view; one state
+    /// per open view, reset on view end (mapped 1:1 onto the triggers' existing
+    /// cycle-scoped maps).
+    /// </summary>
+    public sealed class SnapshotChainState
+    {
+        /// <summary>First exported file of the cycle (the anchor's sha256).</summary>
+        public string anchorHash;
+        /// <summary>Ancestor file hashes of the *last exported* chain member, anchor first, self
+        /// excluded (empty right after the anchor). The next delta's `bases` = this + lastHash,
+        /// so the chain segment always travels in the file bytes — a consumer resolves the
+        /// chain from the store alone, without ledger resolvability (see UISnapshotBinaryWriter).</summary>
+        public List<string> bases = new List<string>();
+        /// <summary>Hash of the last exported chain member (the base the next delta diffs against).</summary>
+        public string lastHash;
+        /// <summary>Last exported materialized tree — the diff target. Replaced whole after each successful export.</summary>
+        public UISnapshot materialized;
     }
 }

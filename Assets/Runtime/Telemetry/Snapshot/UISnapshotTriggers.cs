@@ -31,6 +31,9 @@ namespace mdu.ui.telemetry.snapshot
         /// queue here instead of being dropped and capture when the interval elapses
         /// (see <see cref="processDeferredCaptures"/>) — the interval paces captures,
         /// it never cancels one: every view cycle yields exactly one snapshot.
+        /// `firstRaiseTime` carries the mutating view's burst origin time through
+        /// the pacing wait, so the ADR-0001 settle latency covers raise → export
+        /// (NaN for everything paced that is not a mutation capture).
         /// </summary>
         private readonly Queue<DeferredCapture> _deferredCaptures = new();
 
@@ -38,7 +41,13 @@ namespace mdu.ui.telemetry.snapshot
         {
             public readonly IView View;
             public readonly string Source;
-            public DeferredCapture(IView view, string source) { View = view; Source = source; }
+            public readonly float FirstRaiseTime;
+            public DeferredCapture(IView view, string source, float firstRaiseTime = float.NaN)
+            {
+                View = view;
+                Source = source;
+                FirstRaiseTime = firstRaiseTime;
+            }
         }
 
         /// <summary>
@@ -72,7 +81,14 @@ namespace mdu.ui.telemetry.snapshot
         {
             public readonly IView View;
             public readonly float DueTime;
-            public PendingMutation(IView view, float dueTime) { View = view; DueTime = dueTime; }
+            /// <summary>Unscaled time of the burst's first raise (ADR-0001 settle latency).</summary>
+            public readonly float FirstRaiseTime;
+            public PendingMutation(IView view, float dueTime, float firstRaiseTime)
+            {
+                View = view;
+                DueTime = dueTime;
+                FirstRaiseTime = firstRaiseTime;
+            }
         }
 
         /// <summary>Active debounce windows keyed by view key (id, else runtime instance id).</summary>
@@ -93,6 +109,19 @@ namespace mdu.ui.telemetry.snapshot
         /// mutation dedupe. Scoped to the cycle (cleared on view end) and to the
         /// dedupe being enabled; lifecycle captures always overwrite it.</summary>
         private readonly Dictionary<string, string> _lastFingerprintByView = new();
+
+        /// <summary>
+        /// ADR-0009 chain state per view key: the open cycle's anchor + last
+        /// exported member (hash + materialized tree). Lifecycle: created on the
+        /// cycle's first export, appended per delta export, reset on view end
+        /// and on the lifecycle capture of the next cycle (alongside the
+        /// fingerprint map above — the chain lifecycle is deliberately the same
+        /// one). Memory: one full node tree per open view (the single new piece
+        /// of cycle state the ADR's decision accepts); alternate dispose works
+        /// against an in-app process only, so no persistence concerns (nothing
+        /// is reloaded from disk).
+        /// </summary>
+        private readonly Dictionary<string, SnapshotChainState> _chainsByView = new();
 
         public void tick()
         {
@@ -295,9 +324,22 @@ namespace mdu.ui.telemetry.snapshot
             _mutationHooked = true;
         }
 
-        private void onUIElementCreated(IUI element, IView ownerView) => scheduleMutationCapture(ownerView, "creation");
+        private void onUIElementCreated(IUI element, IView ownerView)
+        {
+            // ADR-0006: this raise is UMDUI's own dirt signal for structural
+            // change — a created element can leave layout stale under the owner
+            // view, so it arms the capture-side layout gate until a forceNow
+            // consumes it.
+            UILayout.markDirty();
+            scheduleMutationCapture(ownerView, "creation");
+        }
 
-        private void onUIElementRemoved(IUI element, IView ownerView) => scheduleMutationCapture(ownerView, "removal");
+        private void onUIElementRemoved(IUI element, IView ownerView)
+        {
+            // ADR-0006: structural removal arms the layout gate (see above).
+            UILayout.markDirty();
+            scheduleMutationCapture(ownerView, "removal");
+        }
 
         /// <summary>
         /// Schedules/refreshes the owner view's debounced mutation capture. Called
@@ -350,11 +392,16 @@ namespace mdu.ui.telemetry.snapshot
 
                 // Refresh, never extend: the window always sits mutationDebounce
                 // after the newest structural change, so a continuous stream
-                // settles into one capture for its duration.
+                // settles into one capture for its duration. The burst's *first*
+                // raise is kept — the ADR-0001 settle latency measures raises →
+                // exported capture, not just the debounce tail.
                 var key = viewKeyOf(ownerView);
-                _pendingMutations[key] = new PendingMutation(
-                    ownerView,
-                    Time.unscaledTime + Mathf.Max(0f, config.mutationDebounce));
+                var now = Time.unscaledTime;
+                var dueTime = now + Mathf.Max(0f, config.mutationDebounce);
+                var firstRaise = _pendingMutations.TryGetValue(key, out var existing)
+                    ? existing.FirstRaiseTime
+                    : now;
+                _pendingMutations[key] = new PendingMutation(ownerView, dueTime, firstRaise);
             }
             catch (Exception ex)
             {
@@ -431,7 +478,8 @@ namespace mdu.ui.telemetry.snapshot
                 _mutationCapturesPerCycle[key] = count + 1;
                 // respectRateLimit: paced, not dropped — the deferred queue serves
                 // it when the pacing interval elapses, exactly like transitions.
-                captureAsync(view, true, MutationSource).Forget();
+                // The burst's first raise rides along for the ADR-0001 settle latency.
+                captureAsync(view, true, MutationSource, pending.FirstRaiseTime).Forget();
             }
         }
 
@@ -462,6 +510,7 @@ namespace mdu.ui.telemetry.snapshot
             _mutationCapturesPerCycle.Remove(key);
             _lastFingerprintByView.Remove(key);
             _capWarnedViews.Remove(key);
+            _chainsByView.Remove(key);
         }
 
         /// <summary>Stable per-view key: the view's id when set, else its transform
@@ -491,9 +540,19 @@ namespace mdu.ui.telemetry.snapshot
             return true;
         }
 
-        private async UniTask captureAsync(IUI root, bool respectRateLimit, string source)
+        private async UniTask captureAsync(IUI root, bool respectRateLimit, string source, float firstRaiseTime = float.NaN)
         {
             var config = Telemetry.config;
+
+            // ADR-0001: the timing carrier exists only while the kill-switch is on —
+            // disabled, this is the one `if` that gates all instrumentation; there is
+            // no divergent code path behind it. It flows through build → dedupe →
+            // export and the exporter emits the single aggregate log line.
+            CaptureTiming timing = null;
+            if (config.captureTimingEnabled)
+            {
+                timing = new CaptureTiming { source = source, firstRaiseTime = firstRaiseTime };
+            }
 
             if (respectRateLimit)
             {
@@ -502,7 +561,7 @@ namespace mdu.ui.telemetry.snapshot
                 {
                     // Paced, not dropped: the cycle waits for its slot and captures
                     // when the interval elapses (processDeferredCaptures, ticked).
-                    _deferredCaptures.Enqueue(new DeferredCapture(view: root as IView, source));
+                    _deferredCaptures.Enqueue(new DeferredCapture(view: root as IView, source, firstRaiseTime));
                     return;
                 }
             }
@@ -510,7 +569,7 @@ namespace mdu.ui.telemetry.snapshot
 
             try
             {
-                await buildAndExportAsync(root, source);
+                await buildAndExportAsync(root, source, timing);
             }
             catch (Exception ex)
             {
@@ -548,12 +607,12 @@ namespace mdu.ui.telemetry.snapshot
             }
 
             _lastCaptureTime = Time.unscaledTime;
-            captureAsync(view, false, entry.Source + ":queued").Forget();
+            captureAsync(view, false, entry.Source + ":queued", entry.FirstRaiseTime).Forget();
         }
 
-        private async UniTask buildAndExportAsync(IUI root, string source)
+        private async UniTask buildAndExportAsync(IUI root, string source, CaptureTiming timing)
         {
-            var snapshot = UISnapshotBuilder.build(root, source);
+            var snapshot = UISnapshotBuilder.build(root, source, timing);
             if (snapshot == null)
             {
                 return;
@@ -569,14 +628,20 @@ namespace mdu.ui.telemetry.snapshot
             var hadStoredFingerprint = key != null &&
                 _lastFingerprintByView.TryGetValue(key, out previousFingerprint);
 
+            uint? mutationFingerprint = null;
             if (config.enabled && config.mutationDedupe && key != null)
             {
                 var fingerprint = UISnapshotBuilder.fingerprint(snapshot);
+                mutationFingerprint = UISnapshotBuilder.fingerprintUInt(snapshot);
                 if (isMutation && hadStoredFingerprint && previousFingerprint == fingerprint)
                 {
                     // Mutation captures exist to document change; nothing changed
                     // (e.g. a created element settled into an identical layout, or
                     // the creation burst was undone inside the debounce window).
+                    // Same contract under ADR-0009: this fingerprint IS the
+                    // materialized post-delta tree's fingerprint (the delta is
+                    // computed against exactly this fresh tree), so dedupe needs
+                    // no chain cooperation.
                     Debug.Log($"[Telemetry] mutation capture skipped — '{snapshot.view?.name}' unchanged since last export ({snapshot.nodes.Count} nodes)");
                     return;
                 }
@@ -586,21 +651,57 @@ namespace mdu.ui.telemetry.snapshot
             if (!isMutation && key != null)
             {
                 // A lifecycle capture is the opening shot of a visibility cycle —
-                // the mutation cap (and its warning latch) restart with it.
+                // the mutation cap (and its warning latch) restart with it, and so
+                // does the delta chain (ADR-0009 point 3: the chain lifecycle maps
+                // 1:1 onto the existing cycle-scoped state).
                 _mutationCapturesPerCycle.Remove(key);
                 _capWarnedViews.Remove(key);
+                _chainsByView.Remove(key);
+            }
+
+            // ADR-0009: choose the content form. A mutation capture resolves to a
+            // delta only when (a) the binary format is on and the delta knob isn't
+            // rolled back, (b) this view's cycle already exported an anchor or an
+            // earlier delta (chain.materialized), and (c) the fresh walk differs
+            // from the chain (dedupe above guarantees it does — a same-fingerprint
+            // capture never reaches here).
+            SnapshotChainState chain = null;
+            SnapshotDelta delta = null;
+            var deltaChainsEnabled = config.enabled &&
+                                     config.snapshotFormat == SnapshotFormat.Binary &&
+                                     config.mutationDeltaEnabled;
+            if (deltaChainsEnabled && key != null && isMutation)
+            {
+                if (_chainsByView.TryGetValue(key, out chain) &&
+                    chain.materialized != null && !string.IsNullOrEmpty(chain.lastHash))
+                {
+                    delta = UISnapshotDeltaBuilder.build(
+                        chain, snapshot,
+                        mutationFingerprint ?? UISnapshotBuilder.fingerprintUInt(snapshot) ?? 0u);
+                }
+                else
+                {
+                    chain = null; // no anchor in this cycle yet — the capture is the anchor
+                }
             }
 
             // One capture per visibility cycle is guaranteed by the transitions /
             // popup triggers themselves — no cross-cycle content dedupe here (the
             // mutation-only dedupe above is scoped to a cycle exactly so the old
-            // 'view id + node count' starvation can't come back).
-            var path = await UISnapshotExporter.exportToFileAsync(snapshot);
-            if (path == null)
+            // 'view id + node count' starvation can't come back). The timing
+            // carrier rides along; a deduped capture exports nothing and emits
+            // no timing line (its carrier is simply discarded).
+            if (timing != null)
+            {
+                timing.contentMode = delta != null ? "delta" : "anchor";
+            }
+            var result = await UISnapshotExporter.exportToFileAsync(snapshot, timing, delta);
+            if (result == null)
             {
                 // The write failed — forget the just-stored fingerprint so the
                 // never-exported content is not deduped away on a later identical
-                // mutation capture.
+                // mutation capture. The chain state is untouched: append-only and
+                // committed only on success (same rollback discipline).
                 if (config.enabled && config.mutationDedupe && key != null)
                 {
                     if (hadStoredFingerprint)
@@ -615,7 +716,34 @@ namespace mdu.ui.telemetry.snapshot
                 return;
             }
 
-            Debug.Log($"[Telemetry] snapshot ({source}) saved: {path} [{snapshot.nodes.Count} nodes]");
+            // Chain commit: appended only after the file write succeeded, so a
+            // failed delta export cannot leave a chain member pointing at bytes
+            // that never existed on disk.
+            if (deltaChainsEnabled && key != null)
+            {
+                if (chain == null)
+                {
+                    // First export of this cycle (anchor) — start a fresh chain even
+                    // when a previous cycle's state was stale (format toggles, etc.).
+                    chain = new SnapshotChainState
+                    {
+                        anchorHash = result.fileHash
+                    };
+                    _chainsByView[key] = chain;
+                }
+                else
+                {
+                    // Delta appended: this member becomes the next base's ancestors tail.
+                    chain.bases.Add(chain.lastHash);
+                }
+                chain.lastHash = result.fileHash;
+                chain.materialized = snapshot;
+            }
+
+            var details = delta != null
+                ? $" delta: -{delta.removedIds.Count} +{delta.added.Count} ~{delta.changed.Count}"
+                : "";
+            Debug.Log($"[Telemetry] snapshot ({source}) saved: {result.path} [{snapshot.nodes.Count} nodes]{details}");
         }
 
         private static bool hotkeyAllowed(TelemetryConfig config)

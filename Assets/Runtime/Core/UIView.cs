@@ -93,6 +93,8 @@ namespace mdu.ui
             gameObject.SetActive(true);
             // LayoutRebuilder.ForceRebuildLayoutImmediate on a view root is a no-op
             // (no ILayoutController on it), so flush canvas queues + rebuild real roots.
+            // ADR-0006: this force also consumes UILayout's dirt flag — the show-time
+            // flush guarantees current layout, so the next capture's gate reads clean.
             UILayout.forceNow(rectTransform);
 
             _state = ViewState.VISIBLE;

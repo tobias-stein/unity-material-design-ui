@@ -10,6 +10,7 @@
  *   `./normalize` subpath — no DOM dependencies)
  */
 export * from "./model.js";
+export * from "./binaryDecode.js";
 export * from "./colors.js";
 export * from "./appliedTheme.js";
 export * from "./normalize.js";
