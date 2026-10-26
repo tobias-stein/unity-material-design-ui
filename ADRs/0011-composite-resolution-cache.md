@@ -1,6 +1,6 @@
 # ADR-0011 — Cache the composite resolution index in the viewer (memoized + incremental)
 
-- **Status:** Proposed (execution priority 11, P2 tier)
+- **Status:** Declined (2026-10-26) — execution priority 11, P2 tier; evidence: session `fab6c430e7954340a8706f7c62c5e490` (69 s) measured 76 events / 32 anchors-overhead, far below the ADR's own scale trigger (multi-thousand-anchor backlog, live-polling). Re-opens only when a session approaches ~1k+ anchors or live feed-lag is observed.
 - **Date:** 2026-10-24
 - **Deciders:** Tobias Stein
 - **Depends on:** ADR-0001's session-end evidence only indirectly — gated by a *viewer-side* threshold (large backlogs), not by Unity-runtime cost

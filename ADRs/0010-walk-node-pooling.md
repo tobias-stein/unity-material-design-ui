@@ -1,6 +1,6 @@
 # ADR-0010 — Walk-level node/data pooling targeted at GC spikes during mutation bursts
 
-- **Status:** Proposed (execution priority 10, P2 tier — only advances on ADR-0001 evidence)
+- **Status:** Proposed (execution priority 10, P2 tier) — gate half-answered 2026-10-26 (session `fab6c430…`): the walk is now the capture's first-order main-thread cost (41 mutation captures, avg 4.5 ms walk / avg 278 nodes, worst 14.2 ms at 145 nodes; serialize already collapsed by 0009's deltas to 0.87 ms avg) — but whether the allocation profile produces first-order GC pressure is still unproven, so the pool stays unbuilt. The ADR-0001 timing line now carries per-capture GC evidence (`gc=+Ncol/+XKB` — gen-0 collection delta + main-thread allocated-bytes delta); decide on the next session's numbers.
 - **Date:** 2026-10-24
 - **Deciders:** Tobias Stein
 - **Depends on:** ADR-0001 (must show GC pressure is a first-order cost, not noise), ADR-0009 (if deltas land, full-tree allocation mostly disappears and this ADR likely dies)

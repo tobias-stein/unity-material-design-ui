@@ -12,7 +12,7 @@ namespace mdu.ui.telemetry.snapshot
     /// created by the capture entry point only while
     /// <see cref="TelemetryConfig.captureTimingEnabled"/> is on, then threaded through
     /// build → dedupe → export: <see cref="UISnapshotBuilder.build"/> fills the
-    /// main-thread phases, <see cref="UISnapshotExporter"/> fills the pool-thread
+    /// main-thread phases (and the ADR-0010 GC gate markers), <see cref="UISnapshotExporter"/> fills the pool-thread
     /// phases (serialize / encode+hash / write / file bytes) and emits the single
     /// aggregate log line on the main-thread continuation after the write succeeded.
     /// Diagnostics only — nothing here enters the snapshot, the YAML, the ledger or
@@ -51,6 +51,21 @@ namespace mdu.ui.telemetry.snapshot
         public float writeMs;
         public long fileBytes;
 
+        /// <summary>
+        /// ADR-0010 gate markers, taken by <see cref="UISnapshotBuilder.build"/> on
+        /// the main thread at build start: <see cref="System.GC.CollectionCount"/>
+        /// of gen 0 (process-wide — collections are triggered by allocation from
+        /// any thread) and <see cref="System.GC.GetAllocatedBytesForCurrentThread"/>(
+        /// main-thread allocated bytes — the thread the walk runs on, which is the
+        /// pool's risk surface). Deltas are computed at emit time on the same
+        /// main-thread continuation, so between-samples allocation from the
+        /// ledger continuation itself rides in the delta (documented, not a
+        /// per-phase pinpoint — the gate asks whether GC pressure is first-order,
+        /// not for a phase attribution).
+        /// </summary>
+        public int gcGen0From;
+        public long gcBytesFrom;
+
         /// <summary>Sum of the measured pipeline phases (build + serialize + encode+hash + write).</summary>
         public float TotalMs => buildMs + serializeMs + encodeHashMs + writeMs;
 
@@ -86,7 +101,9 @@ namespace mdu.ui.telemetry.snapshot
                 $"force={(layoutForced ? "forced" : "gated")} " +
                 $"build={format(buildMs)}ms walk={format(walkMs)}ms serialize={format(serializeMs)}ms " +
                 $"encode={format(encodeHashMs)}ms write={format(writeMs)}ms total={format(TotalMs)}ms " +
-                $"file={format(fileBytes / 1024f)}KB{settle}");
+                $"file={format(fileBytes / 1024f)}KB " +
+                $"gc=+{System.GC.CollectionCount(0) - gcGen0From}col/" +
+                $"+{format((System.GC.GetAllocatedBytesForCurrentThread() - gcBytesFrom) / 1024f)}KB{settle}");
         }
 
         private static string format(float value)

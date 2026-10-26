@@ -18,8 +18,8 @@ ADR must be justified by its numbers before advancing to implementation.
 | [0007](0007-session-theme-manifest.md) | Session-scoped theme manifest | P2 | contingent on 0008 |
 | [0008](0008-binary-snapshot-format-v3.md) | Binary snapshot format v3 (varint + string table) | P2 | 0001 (prototype deltas) |
 | [0009](0009-delta-mutation-captures.md) | Delta mutation captures on the anchor chain | P2 | lands **with** 0008 as one migration |
-| [0010](0010-walk-node-pooling.md) | Walk-level node/data pooling | P2 | narrowed by 0009 (delta exports skip full serialization, the walk still allocates the fresh diff tree) — only advances on ADR-0001 evidence |
-| [0011](0011-composite-resolution-cache.md) | Memoized composite resolution index (viewer) | P2 | viewer-scale trigger only |
+| [0010](0010-walk-node-pooling.md) | Walk-level node/data pooling | P2 | GC-gated — the timing line now records `gc=+col/+KB` per capture; decide on the next session's numbers |
+| [0011](0011-composite-resolution-cache.md) | Memoized composite resolution index (viewer) | P2 | **Declined 2026-10-26** — session had 76 events / 32 anchors; the thousands-of-anchors trigger is ≥2 orders of magnitude away |
 
 ## The one rule these records encode
 
@@ -33,3 +33,20 @@ is either **justified by the session data** or **explicitly declined with a numb
 ADRs 0007 + 0008 + 0009 form **one** migration (single versioned format change), never a
 sequence of three. 0002/0003/0006 are independent code-path optimizations with no schema
 coupling and can ship individually.
+
+## Session evidence (2026-10-26 — session `fab6c430…`, 69 s, first v3 session)
+
+From 50 timed captures (Editor.log `capture timing` lines) + the on-disk `.mds` backlog:
+
+- **Delta captures (0009) collapsed serialize+bytes for quiescent trees**: anchors
+  avg ~13 KB / serialize 2–19 ms; quiescent deltas 1.4–3 KB, serialize 0.0–0.6 ms,
+  total ≤6 ms; delta-heavy bursts 12–63 KB (per-node patches under actual churn).
+- **The walk is the first-order main-thread cost**: per mutation capture avg 4.5 ms
+  walk (worst 14.2 ms); anchors serialize comparably to their walk (up to 19 ms).
+  With serialize no longer the dominant phase, the remaining question is GC
+  pressure from the walk's fresh POCO tree → 0010's gate.
+- **GC gate armed**: per-capture `gc=+Ncol/+XKB` (gen-0 collections process-wide +
+  main-thread allocated bytes) now rides every timing line to answer 0010 on the
+  next session's data.
+- **0011 declined on the numbers** (76 events / 32 anchors vs its thousands-of-anchors
+  trigger); **0010 stays Proposed** pending one more instrumented session.

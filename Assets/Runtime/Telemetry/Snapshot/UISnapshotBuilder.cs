@@ -109,6 +109,16 @@ namespace mdu.ui.telemetry.snapshot
             // build-walk remainder. Null when the kill-switch is off.
             var stopwatch = timing != null ? Stopwatch.StartNew() : null;
 
+            // ADR-0010 gate: GC evidence sampled at build start on the main thread
+            // (deltas are logged at emit on the same thread — see CaptureTiming).
+            // Two reads + one property getter, zero allocation when the
+            // kill-switch is off.
+            if (timing != null)
+            {
+                timing.gcGen0From = GC.CollectionCount(0);
+                timing.gcBytesFrom = GC.GetAllocatedBytesForCurrentThread();
+            }
+
             // ADR-0006: dirt-gated layout force. The per-root LayoutRebuilder
             // sweep only buys anything when layout is actually stale — at
             // settle-anchored capture points Unity has almost always applied
