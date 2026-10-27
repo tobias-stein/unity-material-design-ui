@@ -18,7 +18,7 @@ ADR must be justified by its numbers before advancing to implementation.
 | [0007](0007-session-theme-manifest.md) | Session-scoped theme manifest | P2 | contingent on 0008 |
 | [0008](0008-binary-snapshot-format-v3.md) | Binary snapshot format v3 (varint + string table) | P2 | 0001 (prototype deltas) |
 | [0009](0009-delta-mutation-captures.md) | Delta mutation captures on the anchor chain | P2 | lands **with** 0008 as one migration |
-| [0010](0010-walk-node-pooling.md) | Walk-level node/data pooling | P2 | GC-gated — the timing line now records `gc=+col/+KB` per capture; decide on the next session's numbers |
+| [0010](0010-walk-node-pooling.md) | Walk-level node/data pooling | P2 | **Declined 2026-10-27** — 2 sessions / 64 timed captures: gen-0 collections never landed in a capture window (`+0col` ×63; one `+1col` whose pause fell in the pool-thread serialize phase). Re-opens on Profiler-proven capture-correlated main-thread GC spikes |
 | [0011](0011-composite-resolution-cache.md) | Memoized composite resolution index (viewer) | P2 | **Declined 2026-10-26** — session had 76 events / 32 anchors; the thousands-of-anchors trigger is ≥2 orders of magnitude away |
 
 ## The one rule these records encode
@@ -50,3 +50,27 @@ From 50 timed captures (Editor.log `capture timing` lines) + the on-disk `.mds` 
   next session's data.
 - **0011 declined on the numbers** (76 events / 32 anchors vs its thousands-of-anchors
   trigger); **0010 stays Proposed** pending one more instrumented session.
+
+## Session evidence (2026-10-27 — session `b11f0639…`, 64 s; the 0010 verdict)
+
+From the gc-instrumented timing lines (32 captures) + the direct session API:
+
+- **0010's gate is NOT met — declined**: gen-0 collections inside capture windows
+  0×31/32; the single `+1col` capture is the instructive outlier
+  (`serialize=104.8ms` / `write=16.4ms` vs 3.8/0.3 ms medians — a global GC pause
+  plus disk hiccup landing inside the *pool-thread* phase, which the tier-1
+  serialize move exists to absorb). No main-thread build/walk phase ever
+  coincided with a collection → the capture does not create its own GC spikes.
+- **Delta captures keep paying off**: quiescent deltas 1.4–2.5 KB / total ≤8 ms
+  at 278–301 nodes; anchors 10 KB–74 KB (74 KB at 738 nodes — the largest tree
+  yet) with serialize ≤4.6 ms.
+- **Probe correction**: `GC.GetAllocatedBytesForCurrentThread` measures a
+  constant 0 under Unity's Boehm runtime (dead on arrival — even 738-node walks
+  reported `+0.0KB`); the byte probe is now `Profiler.GetTotalAllocatedMemoryLong`
+  (process-wide Mono heap). The collection counter was the decisive instrument
+  and works.
+- **Server-side stale-manifest cache found and fixed** (viewer): the compare
+  view session showed `theme manifest ref … unresolved` from snapshot 17+ —
+  manifest bytes *did* contain the appended entries; the decoded-manifest cache
+  never re-probed, and a degraded parse was itself cached by snapshot hash.
+  Both fixed: byte-keyed decode cache + manifest-degraded parses are not cached.

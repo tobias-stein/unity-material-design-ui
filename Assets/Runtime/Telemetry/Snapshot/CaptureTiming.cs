@@ -55,13 +55,15 @@ namespace mdu.ui.telemetry.snapshot
         /// ADR-0010 gate markers, taken by <see cref="UISnapshotBuilder.build"/> on
         /// the main thread at build start: <see cref="System.GC.CollectionCount"/>
         /// of gen 0 (process-wide — collections are triggered by allocation from
-        /// any thread) and <see cref="System.GC.GetAllocatedBytesForCurrentThread"/>(
-        /// main-thread allocated bytes — the thread the walk runs on, which is the
-        /// pool's risk surface). Deltas are computed at emit time on the same
-        /// main-thread continuation, so between-samples allocation from the
-        /// ledger continuation itself rides in the delta (documented, not a
-        /// per-phase pinpoint — the gate asks whether GC pressure is first-order,
-        /// not for a phase attribution).
+        /// any thread) and <see cref="UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong"/>
+        /// (process-wide Mono/Boehm allocated heap — Boehm's heap has no per-thread
+        /// accounting; the delta still lands exactly where capture allocations
+        /// land, and the CollectionCount delta is the pause-proven part).
+        /// Deltas are computed at emit time on the same main-thread continuation.
+        /// (Superseded probe: <c>GC.GetAllocatedBytesForCurrentThread</c> measured
+        /// literally 0 under Unity's runtime — it does not track under Boehm.)
+        /// The gate asks whether GC pressure is first-order, not for a phase
+        /// attribution.
         /// </summary>
         public int gcGen0From;
         public long gcBytesFrom;
@@ -103,7 +105,7 @@ namespace mdu.ui.telemetry.snapshot
                 $"encode={format(encodeHashMs)}ms write={format(writeMs)}ms total={format(TotalMs)}ms " +
                 $"file={format(fileBytes / 1024f)}KB " +
                 $"gc=+{System.GC.CollectionCount(0) - gcGen0From}col/" +
-                $"+{format((System.GC.GetAllocatedBytesForCurrentThread() - gcBytesFrom) / 1024f)}KB{settle}");
+                $"+{format((UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() - gcBytesFrom) / 1024f)}KB{settle}");
         }
 
         private static string format(float value)

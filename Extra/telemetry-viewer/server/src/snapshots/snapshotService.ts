@@ -19,6 +19,7 @@
  *   warning, the acknowledged ADR-0007 pruning consequence.
  */
 import type { SnapshotStore } from "../storage/snapshotStore.js";
+import { sha256Of } from "../storage/snapshotStore.js";
 import {
   decodeSnapshotBytes,
   decodeMdsBytes,
@@ -57,8 +58,17 @@ export class SnapshotService {
   private readonly cache: Map<string, ParsedSnapshot> = new Map();
   /** Decoded chain members by file hash — deltas recur across later members' replays. */
   private readonly docCache: Map<string, MdsSnapshotDoc> = new Map();
-  /** Session id → decoded manifest entries; a miss re-probes (direct file stats are cheap). */
-  private readonly manifestCache: Map<string, MdsThemeManifest> = new Map();
+  /**
+   * Session id → decoded manifest *with the bytes it was decoded from*. The
+   * runtime rewrites this file mid-session (every distinct theme hash appends),
+   * so a decoded-once cache would serve a stale, entry-poor manifest for the
+   * rest of the process lifetime — exactly the "already known, got more entries
+   * later" failure observed repeatedly. So: re-read the tiny (~2.5 KB) manifest
+   * every lookup, keep only the *decode* cached, and refresh it whenever the
+   * bytes' hash differs (the manifest file's replace-write makes change →
+   * different sha256, byte-identical → sha equal → zero re-decode).
+   */
+  private readonly manifestCache: Map<string, { bytesSha256: string; manifest: MdsThemeManifest }> = new Map();
 
   constructor(
     private store: SnapshotStore,
@@ -166,8 +176,17 @@ export class SnapshotService {
 
     if (resolved.sha256 !== null && this.cacheEntries > 0) {
       // Insert at the end; evict the least-recently-used entry beyond the cap.
+      // Manifest-ref-degraded parses are NOT cached (ADR-0007): a snapshot hash
+      // stays valid forever while the *session manifest* the theme resolves
+      // through gets rewritten mid-session (theme switch appends entries).
+      // Caching the degraded parse would pin its warning for the process
+      // lifetime; re-parsing until the manifest catches up is cheap (≤ a few
+      // bytes/decodes of a 2.5 KB manifest) and self-healing.
+      const manifestDegrade = parsed.warnings.some((w) => w.includes("theme manifest"));
       this.cache.delete(resolved.sha256);
-      this.cache.set(resolved.sha256, parsed);
+      if (!manifestDegrade) {
+        this.cache.set(resolved.sha256, parsed);
+      }
       while (this.cache.size > this.cacheEntries) {
         const oldest = this.cache.keys().next().value;
         if (oldest === undefined) break;
@@ -277,20 +296,28 @@ export class SnapshotService {
     const sessionId = typeof doc.app?.["sessionId"] === "string" ? (doc.app["sessionId"] as string) : null;
     if (themeRef === null || sessionId === null) return null; // outside a session context → inline fallback already applied by the runtime
 
-    let manifest: MdsThemeManifest | null = this.manifestCache.get(sessionId) ?? null;
-    if (manifest === null) {
-      const bytes = await this.readManifestBytes(sessionId);
-      if (bytes === null) return null;
+    const bytes = await this.readManifestBytes(sessionId);
+    if (bytes === null) return null;
+
+    // Decode-cache keyed on the bytes themselves (see manifestCache doc). The
+    // read is always fresh — a mid-session theme switch appends entries and the
+    // sha changes, so a stale manifest can never outlive the file that fixed it.
+    const manifestBytesSha = sha256Of(Buffer.from(bytes));
+    const cached = this.manifestCache.get(sessionId) ?? null;
+    let manifest: MdsThemeManifest;
+    if (cached !== null && cached.bytesSha256 === manifestBytesSha) {
+      manifest = cached.manifest;
+    } else {
       try {
-        const decoded = decodeMdsBytes(bytes, true) as { manifest: MdsThemeManifest };
-        manifest = decoded.manifest;
-        this.manifestCache.set(sessionId, manifest);
+        manifest = (decodeMdsBytes(bytes, true) as { manifest: MdsThemeManifest }).manifest;
       } catch (error) {
         // Corrupt/refused manifest — same degrade as a missing one.
         warnings.push(`theme manifest for session ${sessionId} is unreadable: ${error instanceof Error ? error.message : String(error)}`);
         return null;
       }
+      this.manifestCache.set(sessionId, { bytesSha256: manifestBytesSha, manifest });
     }
+
     const entry = manifest.find((candidate) => candidate.hash === themeRef);
     return entry?.theme ?? null;
   }

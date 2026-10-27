@@ -118,6 +118,34 @@ describe("MDS theme manifest (ADR-0007)", () => {
     expect(resolved.parsed.theme).toBeNull();
     expect(resolved.parsed.warnings.some((w) => w.includes("manifest"))).toBe(true);
   });
+
+  it("re-probes the manifest when the runtime appends entries mid-session (no stale decoded cache)", async () => {
+    // The session's manifest starts with one theme; the runtime rewrites the file
+    // when a new hash appears. A decode-once cache served the stale manifest for
+    // the rest of the process — the cache must key on the bytes (sha256 of a
+    // ~2.5 KB file per lookup is trivial).
+    const otherTheme = { ...testTheme, seedColor: "#123456", palette: { surface: "#123456" } };
+    const firstManifest = encodeManifest([["6750a4ff", testTheme]]);
+    const newRef = encodeThemeRefAnchor("12345612");
+    const refHash = sha(newRef);
+    const files = new Map<string, Uint8Array>([[refHash, newRef]]);
+    const byName = new Map<string, Uint8Array>([["theme-manifest-sess-1.mds", firstManifest]]);
+    const service = new SnapshotService(memoryStore(files, byName));
+
+    // Manifest still lacks the appended theme — unresolved with a degrade warning.
+    const stale = await service.resolve({ key: null, hash: refHash });
+    expect(stale.parsed.themeRef).toBe("12345612");
+    expect(stale.parsed.theme).toBeNull();
+    expect(stale.parsed.warnings.some((w) => w.includes("manifest"))).toBe(true);
+
+    // Runtime rewrites the manifest (append the new entry) — same file name.
+    byName.set("theme-manifest-sess-1.mds", encodeManifest([["6750a4ff", testTheme], ["12345612", otherTheme]]));
+
+    const refreshed = await service.resolve({ key: null, hash: refHash });
+    expect(refreshed.parsed.warnings).toEqual([]);
+    expect(refreshed.parsed.themeRef).toBe("12345612");
+    expect(refreshed.parsed.theme?.["seedColor"]).toBe("#123456");
+  });
 });
 
 describe("MDS delta chain materialization (ADR-0009)", () => {

@@ -111,12 +111,13 @@ namespace mdu.ui.telemetry.snapshot
 
             // ADR-0010 gate: GC evidence sampled at build start on the main thread
             // (deltas are logged at emit on the same thread — see CaptureTiming).
-            // Two reads + one property getter, zero allocation when the
-            // kill-switch is off.
+            // Two getters, zero allocation; the byte probe is the process-wide
+            // Mono allocated heap (GC.GetAllocatedBytesForCurrentThread measures
+            // a constant 0 under Unity's Boehm runtime — not a usable probe).
             if (timing != null)
             {
                 timing.gcGen0From = GC.CollectionCount(0);
-                timing.gcBytesFrom = GC.GetAllocatedBytesForCurrentThread();
+                timing.gcBytesFrom = UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong();
             }
 
             // ADR-0006: dirt-gated layout force. The per-root LayoutRebuilder
