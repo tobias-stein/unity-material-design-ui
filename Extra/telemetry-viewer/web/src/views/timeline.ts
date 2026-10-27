@@ -135,6 +135,9 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   const transportPrev = app.querySelector<HTMLButtonElement>("#tl-prev")!;
   const transportNext = app.querySelector<HTMLButtonElement>("#tl-next")!;
   const transportLast = app.querySelector<HTMLButtonElement>("#tl-last")!;
+  /** Playback (finished sessions only): play/pause toggle + event-step cadence. */
+  const playbackBtn = app.querySelector<HTMLButtonElement>("#tl-play")!;
+  const speedSelect = app.querySelector<HTMLSelectElement>("#tl-speed")!;
 
   // The replica owns its zoom/pan now (user request 2026-10-20): wheel over
   // it zooms (multiplying the fit scale), drag pans the zoomed stage, a
@@ -1188,6 +1191,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
   }
 
   canvas.addEventListener("pointerdown", (event) => {
+    stopPlayback(); // manual interaction on the strip takes over from the player
     if (activePointers.has(event.pointerId)) return;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     canvas.setPointerCapture(event.pointerId);
@@ -1466,10 +1470,18 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
 
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    // SELECT: the speed dropdown keeps its native space behavior; BUTTON: a
+    // focused button is space-activated natively (including the player itself).
+    if (
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)
+    ) {
+      return;
+    }
     switch (event.key) {
       case "ArrowLeft":
       case "ArrowRight": {
+        stopPlayback(); // manual seek takes over from the player
         const dir = event.key === "ArrowLeft" ? -1 : 1;
         const index = nearestEventIndex(dir);
         if (index !== -1) {
@@ -1480,6 +1492,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
       }
       case "PageUp":
       case "PageDown": {
+        stopPlayback(); // manual seek takes over from the player
         const dir = event.key === "PageUp" ? -1 : 1;
         const index = nearestAnchor(dir);
         if (index !== -1) {
@@ -1489,13 +1502,24 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
         break;
       }
       case "Home":
+        stopPlayback(); // manual seek takes over from the player
         fitWindow();
         setPlayheadMs(lo0);
         break;
       case "End":
+        stopPlayback(); // manual seek takes over from the player
         fitWindow();
         setPlayheadMs(hi0);
         break;
+      case " ": {
+        // Play/pause toggle (finished sessions only; a live session leaves
+        // the page's native space handling alone). Hold-repeat must not
+        // strobe the toggle.
+        if (!event.repeat && timeline.sessionEnded && timeline.events.length > 0) {
+          togglePlayback();
+        }
+        break;
+      }
       case "+":
       case "=":
         zoomAround(1.25, canvasWidth() / 2);
@@ -1549,13 +1573,22 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     reveal(event.ms);
   }
 
-  transportFirst.addEventListener("click", () => gotoEvent(0));
-  transportLast.addEventListener("click", () => gotoEvent(timeline.events.length - 1));
+  // Manual seeks stop playback (the stepper is "your hands took over").
+  transportFirst.addEventListener("click", () => {
+    stopPlayback();
+    gotoEvent(0);
+  });
+  transportLast.addEventListener("click", () => {
+    stopPlayback();
+    gotoEvent(timeline.events.length - 1);
+  });
   transportPrev.addEventListener("click", () => {
+    stopPlayback();
     const index = nearestEventIndex(-1);
     if (index !== -1) gotoEvent(index);
   });
   transportNext.addEventListener("click", () => {
+    stopPlayback();
     const index = nearestEventIndex(1);
     if (index !== -1) gotoEvent(index);
   });
@@ -1567,8 +1600,90 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     transportLast.disabled = !hasEvents;
     transportPrev.disabled = !hasEvents || nearestEventIndex(-1) === -1;
     transportNext.disabled = !hasEvents || nearestEventIndex(1) === -1;
+    playbackBtn.disabled = !hasEvents;
   }
   updateTransport();
+
+  /* ---------------------------------------------------------------- playback */
+
+  /**
+   * Playback (2026-10-27): finished-session auto-stepping — the ▶/⏸ toggle
+   * between the stepper buttons advances one event per interval from the
+   * speed dropdown (0.2s…3s, default 1s), exactly like pressing → repeatedly.
+   * Visible only when the runtime's end marker arrived (`sessionEnded`) —
+   * live sessions keep the auto-scroll toggle instead. Every manual seek
+   * (canvas scrub/click, stepper buttons, keyboard steps) stops it; running
+   * off the last event stops it. Space toggles (see onKeyDown).
+   */
+  let playing = false;
+  let playbackTimer = 0;
+  let playbackSpeedMs = 1000;
+
+  /** Halt timer + reset the toggle to its "play" face. Idempotent. */
+  function stopPlayback(): void {
+    if (playbackTimer !== 0) {
+      window.clearInterval(playbackTimer);
+      playbackTimer = 0;
+    }
+    playing = false;
+    playbackBtn.textContent = "▶";
+    playbackBtn.setAttribute("aria-pressed", "false");
+    playbackBtn.setAttribute("aria-label", "play");
+    playbackBtn.classList.remove("active");
+    playbackBtn.title = "play (space)";
+  }
+
+  /** Advance one event (skipping same-ms duplicates); off the tail ⇒ stop. */
+  function advancePlayback(): void {
+    const index = nearestEventIndex(1);
+    if (index === -1) {
+      stopPlayback();
+      return;
+    }
+    gotoEvent(index);
+  }
+
+  function startPlayback(): void {
+    if (timeline.events.length === 0) return;
+    stopPlayback();
+    // At/after the last event ⇒ restart from the first (media-player rule).
+    if (nearestEventIndex(1) === -1) gotoEvent(0);
+    playing = true;
+    playbackBtn.textContent = "⏸";
+    playbackBtn.setAttribute("aria-pressed", "true");
+    playbackBtn.setAttribute("aria-label", "pause");
+    playbackBtn.classList.add("active");
+    playbackBtn.title = "pause (space)";
+    playbackTimer = window.setInterval(advancePlayback, playbackSpeedMs);
+  }
+
+  const togglePlayback = (): void => {
+    if (playing) stopPlayback();
+    else startPlayback();
+  };
+
+  playbackBtn.addEventListener("click", togglePlayback);
+
+  /** Chosen cadence applies immediately — a running interval is rescheduled. */
+  speedSelect.addEventListener("change", () => {
+    const seconds = Number.parseFloat(speedSelect.value);
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    playbackSpeedMs = seconds * 1000;
+    if (playing) {
+      window.clearInterval(playbackTimer);
+      playbackTimer = window.setInterval(advancePlayback, playbackSpeedMs);
+    }
+  });
+
+  /** Finished sessions get the player; live ones keep auto-scroll only. The
+   *  markup starts hidden — the two reveal points are: page load on an ended
+   *  session (`sessionEnded`), and the live poll seeing the end marker. */
+  const showPlayback = (): void => {
+    playbackBtn.classList.remove("hidden");
+    speedSelect.classList.remove("hidden");
+  };
+  if (timeline.sessionEnded) showPlayback();
+
 
   /* ------------------------------------------------------------- auto-scroll */
 
@@ -1670,10 +1785,12 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
         liveBadge.classList.remove("syncing");
         if (next.sessionEnded) {
           // Session closed — final static render, badge gone, poll stops.
+          // The auto-scroll toggle (live-only) is replaced by the player.
           stopLivePoll();
           rebuildModel(next);
           syncReplica();
           hideAutoStep();
+          showPlayback();
           return;
         }
         if (Date.now() - next.endMs > LIVE_STALE_MS) {
@@ -1728,6 +1845,7 @@ export async function renderTimelineView(app: HTMLElement, sessionId: string): P
     destroy() {
       destroyed = true;
       window.clearInterval(liveTimer);
+      stopPlayback(); // release the playback interval too
       document.body.classList.remove("timeline-open");
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
@@ -1763,9 +1881,18 @@ function drawShell(app: HTMLElement, timeline: TimelineResponse): void {
           <div class="segmented" id="tl-transport" role="group" aria-label="Event transport">
             <button type="button" id="tl-first" title="go to first event (Home)">&lt;&lt;</button>
             <button type="button" id="tl-prev" title="previous event (←)">&lt;</button>
+            <button type="button" id="tl-play" class="hidden" title="play (space)" aria-pressed="false" aria-label="play">&#9654;</button>
             <button type="button" id="tl-next" title="next event (→)">&gt;</button>
             <button type="button" id="tl-last" title="go to last event (End)">&gt;&gt;</button>
           </div>
+          <select id="tl-speed" class="speed-select hidden" aria-label="Playback speed" title="playback speed: one event per interval">
+            <option value="0.2">0.2s</option>
+            <option value="0.5">0.5s</option>
+            <option value="1" selected>1s</option>
+            <option value="1.5">1.5s</option>
+            <option value="2">2s</option>
+            <option value="3">3s</option>
+          </select>
           <div class="segmented hidden" id="tl-autostep" role="group" aria-label="Auto-scroll">
             <button type="button" id="tl-autostep-btn" title="auto-scroll: follow the newest event while the session is live">⏩ auto-scroll</button>
           </div>

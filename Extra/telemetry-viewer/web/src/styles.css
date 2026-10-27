@@ -239,6 +239,20 @@ body.timeline-open { overflow: hidden; }
 }
 .segmented button.active { background: #2f6685; color: #dff3ff; }
 
+/* Playback speed (finished sessions only): the event-step cadence dropdown,
+   styled to sit next to the transport pill like one more segmented control. */
+.speed-select {
+  background: var(--bg-field);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.speed-select:focus-visible { outline: 2px solid #2f6685; outline-offset: 1px; }
+
 .replica-warnings { padding: 0; }
 .warn-chip {
   margin: 8px 12px 0;
