@@ -164,6 +164,48 @@
 
   function fileHref(path) { return "../../" + path.replace(/^\/+/, ""); }
 
+  var REPO_TREE = "https://github.com/tobias-stein/unity-material-design-ui/tree/metrics";
+  var REPO_BLOB = "https://github.com/tobias-stein/unity-material-design-ui/blob/metrics";
+  var repoRootCheck = null;
+
+  function repoFallbackHref(path) {
+    var clean = String(path || "").replace(/^\/+/, "");
+    if (!clean) return REPO_TREE;
+    if (/\/$/.test(clean)) return REPO_TREE + "/" + clean.replace(/\/+$/, "");
+    return REPO_BLOB + "/" + clean;
+  }
+
+  function repoRootAvailable() {
+    if (repoRootCheck) return repoRootCheck;
+    var probe = fileHref("Assets/Runtime/Telemetry/TelemetryConfig.cs");
+    repoRootCheck = fetch(probe, { method: "HEAD", cache: "no-store" })
+      .then(function (response) { return response.ok; })
+      .catch(function () { return false; });
+    return repoRootCheck;
+  }
+
+  function resolveRepoLinks(scope) {
+    if (!window.fetch || window.location.protocol === "file:") return;
+    var root = scope || document;
+    var links = root.querySelectorAll ? root.querySelectorAll('a[href^="../../"]') : [];
+    if (!links.length) return;
+    var atRepoRoot = /\/docs\/telemetry\/(?:index\.html)?$/.test(window.location.pathname);
+    var check = atRepoRoot ? repoRootAvailable() : Promise.resolve(false);
+    check.then(function (found) {
+      Array.prototype.forEach.call(links, function (link) {
+        if (link.dataset.repoFallbackState) return;
+        if (found) {
+          link.dataset.repoFallbackState = "local";
+          return;
+        }
+        var path = link.getAttribute("href").slice(6);
+        link.href = repoFallbackHref(path);
+        link.dataset.repoFallbackState = "fallback";
+        link.title = (link.title ? link.title + " · " : "") + "Source path not available here; opens GitHub";
+      });
+    });
+  }
+
   function truncate(value, max) {
     var text = String(value === undefined ? "" : value);
     return text.length > max ? text.slice(0, Math.max(1, max - 1)) + "…" : text;
@@ -915,6 +957,7 @@
     html += '<button class="mini-button" type="button" data-action="copy">Copy link</button>';
     html += '</div>';
     inspector.innerHTML = html;
+    resolveRepoLinks(inspector);
   }
 
   function initInspectorActions() {
@@ -1782,6 +1825,7 @@
     renderTables();
     renderRecipes();
     renderDeepRefs();
+    resolveRepoLinks(document);
     initMapControls();
     initSearch();
     initToc();

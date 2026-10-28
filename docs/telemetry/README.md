@@ -9,18 +9,19 @@ JavaScript, and SVG. Everything runs locally in the browser.
 
 ## Open it
 
-Serve the folder over HTTP so relative links and deep links behave normally:
+Serve the repository root so repository source links resolve locally:
+
+```sh
+python3 -m http.server 8765
+# open http://localhost:8765/docs/telemetry/
+```
+
+If you only need the page and are happy for source links to open GitHub, serve
+just the docs folder:
 
 ```sh
 python3 -m http.server 8765 --directory docs/telemetry
 # open http://localhost:8765/
-```
-
-From inside the docs folder, this also works:
-
-```sh
-cd docs/telemetry
-python3 -m http.server 8765
 ```
 
 Open `index.html` directly only if you do not need the local server. Serving is
@@ -63,6 +64,18 @@ The page keeps its state in the URL hash, so links can open a precise view:
 
 Supported parameters are `node`, `scenario`, `timeline`, `variant`, and `step`.
 Unknown values fall back to the overview.
+
+## Hosting and source links
+
+The page's own assets (`doc.css`, `favicon.svg`, and the data scripts) are
+relative and work wherever `docs/telemetry/` is served intact.
+
+Repository links — Files, ADRs, and Repo README — are relative while the guide
+is served from the repository root. On load, the page probes one known root
+file. If the root is unavailable, such as when only `docs/telemetry/` is
+published, it rewrites those links to GitHub: directories under `tree/metrics`
+and files under `blob/metrics`. Update `REPO_TREE` and `REPO_BLOB` in `doc.js`
+if the branch changes.
 
 ## Read-only contract
 
