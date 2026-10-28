@@ -23,6 +23,10 @@ the tooling.
   timelines with pixel-faithful replays, cross-session canonical-key
   heatmaps with structure-version modes A/B/C. See its
   [README](Extra/telemetry-viewer/README.md).
+- **Telemetry architecture guide** ([docs/telemetry](docs/telemetry/index.html)):
+  interactive system map, twelve-step data flow, timeline lab, failure
+  matrix, config reference, and ADR rationale. No build step; see the
+  [guide README](docs/telemetry/README.md) to serve it locally.
 
 ## Telemetry tooling quickstart
 

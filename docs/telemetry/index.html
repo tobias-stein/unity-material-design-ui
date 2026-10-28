@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Telemetry architecture · Unity MaterialDesign UI</title>
+  <meta name="description" content="Interactive architecture guide for the Unity MaterialDesign UI telemetry runtime, storage contract, and read-only viewer.">
+  <link rel="stylesheet" href="doc.css">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="Telemetry architecture home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="brand-text">
+        <strong>Telemetry architecture</strong>
+        <small>Unity MaterialDesign UI</small>
+      </span>
+    </a>
+    <div class="topbar-actions">
+      <label class="search" for="node-search">
+        <span aria-hidden="true">⌕</span>
+        <input id="node-search" type="search" placeholder="Find a component…" autocomplete="off" spellcheck="false" aria-label="Find a component">
+        <kbd>/</kbd>
+      </label>
+      <span class="search-count" id="search-count" aria-live="polite"></span>
+      <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">
+        <span class="theme-icon" aria-hidden="true">◐</span>
+      </button>
+      <a class="repo-link" href="../../README.md">Repo README</a>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <nav id="toc" aria-label="On this page">
+        <p class="nav-label">Field guide</p>
+        <a href="#overview">Overview</a>
+        <a href="#mechanics">Core mechanics</a>
+        <a href="#map">System map</a>
+        <a href="#flow">Data flow</a>
+        <a href="#timelines">Timelines</a>
+        <a href="#deep-dives">Deep dives</a>
+        <p class="nav-label">Reference</p>
+        <a href="#reference">Events & formats</a>
+        <a href="#routes">Routes & sources</a>
+        <a href="#failures">Failure matrix</a>
+        <a href="#config">Configuration</a>
+        <a href="#files">Source map</a>
+        <a href="#adrs">ADRs</a>
+        <a href="#recipes">Change recipes</a>
+      </nav>
+      <div class="sidebar-note">
+        <span class="live-dot" aria-hidden="true"></span>
+        <div>
+          <strong>Viewer is read-only</strong>
+          <small>It never writes to InfluxDB or snapshot files.</small>
+        </div>
+      </div>
+      <div class="sidebar-meta">
+        <span>Verified <time datetime="2026-10-27">2026-10-27</time></span>
+        <span>No build step</span>
+      </div>
+    </aside>
+
+    <main id="main">
+      <section class="hero" id="overview">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-dot"></span> Architecture field guide</p>
+          <h1>Telemetry, from a click to a pixel.</h1>
+          <p class="lede">A Unity signal becomes a nanosecond event and a snapshot file. A SHA-256 ledger point joins the two. The viewer unions sources, projects a session, and replays the UI at any moment — without ever writing back.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#map">Explore the system map</a>
+            <a class="button" href="#timelines">Watch a capture</a>
+          </div>
+          <div class="hero-stats" id="hero-stats" aria-label="Document scope"></div>
+        </div>
+        <div class="mental-model">
+          <p class="card-kicker">The 60-second model</p>
+          <ol>
+            <li><span>01</span><div><strong>Capture is event-driven.</strong><p>View activation, structural mutation, and F9 feed a settle/debounce/pacing pipeline. The result is a tree walk, an anchor or delta, and bytes on disk.</p></div></li>
+            <li><span>02</span><div><strong>The ledger joins file to event.</strong><p>The exporter writes first, hashes the exact bytes, then emits <code>ui_snapshot_taken</code>. No write means no ledger point.</p></div></li>
+            <li><span>03</span><div><strong>The viewer reconstructs, never mutates.</strong><p>LP files, InfluxDB, and imported files normalize to <code>RawEvent</code>; the catalog unions; timeline, replay, and aggregate are read models.</p></div></li>
+          </ol>
+          <div class="mental-rule"><span>Invariant</span> A timeline is only honest if the pixels and the events use the same session id and the same nanosecond clock.</div>
+        </div>
+      </section>
+
+      <section class="section" id="mechanics">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Core mechanics</p>
+            <h2>Six ideas that explain the rest</h2>
+          </div>
+          <p class="section-intro">Start here. Each card links to the component that owns the mechanic; the map and timelines let you follow it end to end.</p>
+        </div>
+        <div class="card-grid" id="mechanics-grid"></div>
+      </section>
+
+      <section class="section" id="map">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Interactive component chart</p>
+            <h2>The system, left to right</h2>
+          </div>
+          <p class="section-intro">Five planes: Unity raises, capture encodes, transport stores, the server reads, the browser renders. Click a node for its contract and isolate its direct neighbourhood; hover an edge to read the hand-off.</p>
+        </div>
+
+        <div class="explorer">
+          <div class="map-panel">
+            <div class="map-toolbar">
+              <div class="scenario-pills" id="scenario-pills" role="group" aria-label="Scenario filter"></div>
+              <div class="map-tools" role="group" aria-label="Map controls">
+                <button class="tool-button" id="map-trace" type="button" aria-pressed="false" title="Animate the selected component's edges">Trace</button>
+                <button class="tool-button" id="map-focus" type="button" title="Zoom to the selected component and its neighbours">Focus</button>
+                <button class="tool-button" id="map-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+                <button class="tool-button" id="map-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+                <button class="tool-button" id="map-fit" type="button" title="Fit the whole graph">Fit</button>
+                <button class="tool-button" id="map-clear" type="button" title="Clear selection and scenario">Clear</button>
+              </div>
+            </div>
+            <div class="scenario-banner" id="scenario-banner" hidden></div>
+            <div class="map-legend" id="map-legend" aria-label="Legend"></div>
+            <div class="map-wrap" id="map-wrap">
+              <svg id="system-map" role="group" aria-label="Interactive telemetry component map" tabindex="0"></svg>
+              <div class="map-tooltip" id="map-tooltip" hidden></div>
+              <div class="map-vignette" aria-hidden="true"></div>
+            </div>
+            <div class="map-footer">
+              <span id="map-status">Select a component to inspect it.</span>
+              <span class="map-hint"><span class="hint-wide">Wheel to zoom · drag to pan · <kbd>Enter</kbd> to inspect</span><span class="hint-narrow">Swipe to pan · tap to inspect</span></span>
+            </div>
+          </div>
+
+          <aside class="inspector" id="inspector" aria-live="polite">
+            <div class="inspector-empty">
+              <div class="inspector-glyph" aria-hidden="true">⌁</div>
+              <h3>Pick a component</h3>
+              <p>The inspector shows what it owns, what it reads and writes, the files to open, and the invariants that make replay trustworthy.</p>
+              <p class="muted">Try <button class="inline-link" type="button" data-node="exporter">UISnapshotExporter</button> or <button class="inline-link" type="button" data-node="outbox">InfluxOutboxSink</button>.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="flow">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Data-flow stepper</p>
+            <h2>One interaction, twelve hand-offs</h2>
+          </div>
+          <p class="section-intro">Step through the full path. Each step highlights the components involved on the map above.</p>
+        </div>
+        <div class="flow-layout">
+          <div class="flow-steps" id="flow-steps" role="tablist" aria-label="Data flow steps"></div>
+          <div class="flow-detail" id="flow-detail" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section class="section" id="timelines">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Interactive timeline lab</p>
+            <h2>Where the milliseconds go</h2>
+          </div>
+          <p class="section-intro">Four views of the same system: capture, view lifetime, delivery, and the viewer read path. Durations are illustrative; config-backed values are labelled.</p>
+        </div>
+
+        <div class="timeline-tabs" id="timeline-tabs" role="tablist" aria-label="Timeline topic"></div>
+        <div class="timeline-shell">
+          <div class="timeline-head">
+            <div>
+              <h3 id="timeline-title">Inside one capture</h3>
+              <p id="timeline-description"></p>
+            </div>
+            <div class="timeline-variants" id="timeline-variants" role="group" aria-label="Timeline variant"></div>
+          </div>
+          <div class="timeline-stage">
+            <svg id="timeline-svg" role="img" aria-labelledby="timeline-title timeline-description"></svg>
+            <div class="timeline-tooltip" id="timeline-tooltip" hidden></div>
+          </div>
+          <div class="timeline-controls">
+            <button class="tool-button play" id="timeline-play" type="button" aria-pressed="false"><span aria-hidden="true">▶</span> Play</button>
+            <label class="scrub-label" for="timeline-scrub">Playhead</label>
+            <input id="timeline-scrub" type="range" min="0" max="1000" value="0" step="1">
+            <output id="timeline-time" for="timeline-scrub">0 ms</output>
+            <span class="timeline-live" id="timeline-note"></span>
+          </div>
+          <div class="timeline-readout" id="timeline-readout" aria-live="polite">
+            <span class="readout-empty">Hover or click an item to read its contract.</span>
+          </div>
+          <div class="timeline-legend">
+            <span><i class="swatch work"></i>work</span>
+            <span><i class="swatch wait"></i>wait / window</span>
+            <span><i class="swatch io"></i>disk</span>
+            <span><i class="swatch net"></i>network</span>
+            <span><i class="swatch event"></i>event</span>
+            <span><i class="swatch skip"></i>intentionally skipped</span>
+            <span><i class="swatch error"></i>failure</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="deep-dives">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Deep dives</p>
+            <h2>The parts, with the sharp edges</h2>
+          </div>
+          <p class="section-intro">Each section is self-contained. Code references are repo-relative and validated by <code>check-links.mjs</code>.</p>
+        </div>
+
+        <div class="deep-grid">
+          <details class="deep" open>
+            <summary><span class="deep-number">01</span><span><strong>Session, events, and view spans</strong><small>What the runtime actually records</small></span></summary>
+            <div class="deep-body">
+              <p><code>Telemetry</code> owns the configuration and the hidden <code>TelemetryHost</code>. <code>EventCollector</code> owns the session id, subscribes to <code>UIInteractions</code>, and turns a raise into a <code>TelemetryEvent</code>. The framework never calls telemetry directly; when no listener exists, every raise is a no-op.</p>
+              <p>A view span is opened by <code>view_open</code> and closed by <code>view_close</code>, with dwell seconds. A close raised by a button and the lifecycle raise are deduped through the same open-span map, so exactly one pair is emitted per visible cycle. Popups get their own span and are excluded by name when <code>popupExcludedViews</code> says so.</p>
+              <ul class="sharp-list">
+                <li><strong>The session id is the correlation root.</strong> It is attached to every event and to the snapshot's app info.</li>
+                <li><strong>Owner resolution is a walk.</strong> The owning view is the view itself, the innermost open popup containing the element, or the top-of-stack fallback.</li>
+                <li><strong>The ledger is an event, not a separate store.</strong> <code>snapshotTaken</code> arrives only after the exporter's write succeeded.</li>
+              </ul>
+              <div class="code-refs" data-refs="eventcollector,telemetry,viewmanager"></div>
+            </div>
+          </details>
+
+          <details class="deep">
+            <summary><span class="deep-number">02</span><span><strong>Capture decisions and budgets</strong><small>Settle, debounce, pace, dedupe, chain</small></span></summary>
+            <div class="deep-body">
+              <p><code>UISnapshotTriggers</code> is the policy layer. A view transition waits <code>viewTransitionSettle</code> (500 ms). A structural mutation refreshes a per-view <code>mutationDebounce</code> window (250 ms). Captures closer than <code>viewTransitionMinInterval</code> (1 s) are put in a deferred queue — pacing waits, it does not drop. Near-simultaneous duplicate raises of the same view are suppressed within 100 ms.</p>
+              <p>After the walk, a mutation capture compares a structural fingerprint with the last exported tree of the same view cycle. Equal means no export, no ledger, and no timing line. Otherwise binary mode can emit a sparse delta against the last materialized member; if there is no anchor yet, the capture becomes the anchor.</p>
+              <ul class="sharp-list">
+                <li><strong>Dedupe is cycle-scoped.</strong> Cross-cycle dedupe starved pooled views on reopen; this implementation deliberately resets at view end.</li>
+                <li><strong>The chain is committed after the write.</strong> A failed write rolls the fingerprint back, so identical content is not lost to a later dedupe pass.</li>
+                <li><strong>Layout force is gated.</strong> The capture skips <code>UILayout.forceNow</code> when layout is dirty only in the flag's opinion; the viewer's geometry warning arms a one-force recovery latch.</li>
+              </ul>
+              <div class="code-refs" data-refs="snapshottriggers,layoutgate,delta,builder"></div>
+            </div>
+          </details>
+
+          <details class="deep">
+            <summary><span class="deep-number">03</span><span><strong>The storage contract</strong><small>Bytes first, hash second, ledger third</small></span></summary>
+            <div class="deep-body">
+              <p><code>UISnapshotExporter</code> prepares the path and theme mode on the main thread, then moves serialization, encoding, hashing, and the write to the thread pool. Binary output is MDS v3: magic <code>MDS\n</code>, a string table, anchors, delta members, and a session theme manifest. Legacy YAML v2 with optional gzip remains readable.</p>
+              <p>The SHA-256 is computed over the exact bytes. The ledger point carries that hash plus the logical storage key; the key is a lookup hint, the hash is authoritative. Snapshot retention is newest-survives by count and total size, which can intentionally break old chains or manifest references. The viewer responds with a coded warning rather than inventing a tree.</p>
+              <ul class="sharp-list">
+                <li><strong>No write, no ledger.</strong> The ledger point is emitted after success, never before.</li>
+                <li><strong>Theme before snapshot.</strong> The manifest is registered before a file references it; outside a session context the capture falls back to inline theme.</li>
+                <li><strong>Deltas are store-resolvable.</strong> The chain carries base hashes and ancestor hashes so the server does not need the ledger to materialize it.</li>
+              </ul>
+              <div class="code-refs" data-refs="exporter,binarywriter,thememanifest,snapshotfiles,retention"></div>
+            </div>
+          </details>
+
+          <details class="deep">
+            <summary><span class="deep-number">04</span><span><strong>Delivery and failure</strong><small>Persist before send, ack before delete</small></span></summary>
+            <div class="deep-body">
+              <p>The active sink is chosen per write. With <code>influxEnabled=true</code>, <code>InfluxOutboxSink</code> batches 64 events or 1 s of age, writes a <code>pending-*.lp</code> file before the first POST, and deletes that file only after a 2xx. With Influx disabled, <code>FileEventSink</code> appends one <code>session-&lt;id&gt;.lp</code> per session and rotates on session change.</p>
+              <p>On failure, the pending file stays in the queue. Retries start at the flush interval (1 s), double to a 60 s cap, and recover an old backlog by scanning the events directory at startup. Coalescing combines up to 16 files or 512 KB per request; an oversized head is sent alone so it cannot stall the queue. Delivery is at-least-once; identical series overwrite, so replay is idempotent.</p>
+              <ul class="sharp-list">
+                <li><strong>The viewer is a consumer of the same files.</strong> A pending tail remains inspectable while InfluxDB is down.</li>
+                <li><strong>Retention can delete pending files.</strong> The queue drops missing paths; the outbox never blocks forever on a vanished file.</li>
+                <li><strong>The first failure is logged once.</strong> Repeated failures are suppressed until recovery; telemetry never throws into the app.</li>
+              </ul>
+              <div class="code-refs" data-refs="outbox,filesink,pending,archive,influxdb"></div>
+            </div>
+          </details>
+
+          <details class="deep">
+            <summary><span class="deep-number">05</span><span><strong>Viewer sources and read models</strong><small>Union, project, derive</small></span></summary>
+            <div class="deep-body">
+              <p>Every provider returns <code>RawEvent</code>: measurement, nanosecond timestamp, tags, fields. The LP-file source is canonical for nanosecond truth; the Influx source handles OSS and annotated CSV; imported files replace the universe rather than merging with it. <code>SourceRuntime</code> keeps the mutable mode and roots between env defaults and providers.</p>
+              <p><code>SessionCatalog</code> queries providers in priority order (files first, Influx last), unions sessions present in several providers, and collapses wire-exact duplicates on measurement + timestamp + full tag set + key. <code>projectSessions</code> builds session bounds, event counts, view spans, dwell, and snapshot ledger entries without opening a snapshot. Timeline and aggregate consume the same unioned stream.</p>
+              <ul class="sharp-list">
+                <li><strong>Union, not first-wins.</strong> A pending tail cannot hide a complete Influx ledger.</li>
+                <li><strong>eventCount is an invariant.</strong> The timeline must draw every event the projection counted.</li>
+                <li><strong>Missing is honest.</strong> Unconfigured roots, unreachable sources, and missing artifacts are distinct states.</li>
+              </ul>
+              <div class="code-refs" data-refs="catalog,projection,timeline,lpprovider,influxprovider,importedprovider"></div>
+            </div>
+          </details>
+
+          <details class="deep">
+            <summary><span class="deep-number">06</span><span><strong>Replay, filmstrips, and aggregate</strong><small>Pixels from the same ledger</small></span></summary>
+            <div class="deep-body">
+              <p><code>buildTimelineFrame</code> orders every event, packs spans into rows, and correlates each interaction with the latest anchor of the same view at or before <em>t</em>. The timeline view draws marbles, density bars, and lazy filmstrips. At the playhead it resolves every span covering <em>t</em>, loads that span's capture, and stacks views bottom-to-top by canvas layer: <code>BACKGROUND &lt; DEFAULT &lt; MENU &lt; POPUP</code>.</p>
+              <p><code>@mdu/snapshot-render</code> is the single renderer for the web client, the standalone snapshot viewer, and the server's DOM-free normalization path. It resolves theme roles, lays out flex nodes, draws minimaps, and computes overlay placement from captured anchors. Aggregate reuses the same snapshots and canonical keys, but ignores captured themes and uses a hardcoded light Material-3 baseline for comparison.</p>
+              <ul class="sharp-list">
+                <li><strong>Latest ≤ t is per span.</strong> It is the same correlation rule as aggregate, not a separate heuristic.</li>
+                <li><strong>No invented UI.</strong> A broken chain or missing manifest degrades with a warning chip.</li>
+                <li><strong>Declined optimizations stay visible.</strong> ADR-0010 and ADR-0011 are declines with numbers, not forgotten ideas.</li>
+              </ul>
+              <div class="code-refs" data-refs="timelineview,render,replica,filmstrip,aggregate"></div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="section" id="reference">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Reference</p>
+            <h2>Events and formats</h2>
+          </div>
+          <p class="section-intro">The wire surface the viewer and the runtime agree on. Tags stay bounded; identifying payload lives in fields.</p>
+        </div>
+        <div class="table-wrap" id="measurement-table"></div>
+        <h3 class="subhead">Snapshot formats</h3>
+        <div class="table-wrap" id="format-table"></div>
+      </section>
+
+      <section class="section" id="routes">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">HTTP surface</p>
+            <h2>Routes and sources</h2>
+          </div>
+          <p class="section-intro">All routes are read-only except the source-config and import controls, which only affect the viewer process.</p>
+        </div>
+        <div class="table-wrap" id="routes-table"></div>
+        <h3 class="subhead">Viewer environment</h3>
+        <div class="table-wrap" id="env-table"></div>
+        <div class="note-panel">
+          <strong>Read-only, by construction.</strong> The viewer calls <code>GET /health</code> and <code>POST /api/v2/query</code> on InfluxDB, never the write endpoint. The Influx token is server-side only and is never echoed by any source-config route.
+        </div>
+      </section>
+
+      <section class="section" id="failures">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Failure matrix</p>
+            <h2>What breaks, what survives</h2>
+          </div>
+          <p class="section-intro">Each failure has an owner, a visible state, and a recovery path. The design preference is an honest degraded state over a silent wrong replay.</p>
+        </div>
+        <div class="table-wrap" id="failure-table"></div>
+      </section>
+
+      <section class="section" id="config">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h2>The defaults that shape behaviour</h2>
+          </div>
+          <p class="section-intro">From <code>Assets/Runtime/Telemetry/TelemetryConfig.cs</code>. Defaults are contract: changing one changes the docs and often the tests.</p>
+        </div>
+        <div class="filter-row">
+          <label for="config-filter">Filter fields</label>
+          <input id="config-filter" type="search" placeholder="e.g. settle, influx, retention…" autocomplete="off">
+          <span id="config-count" class="muted"></span>
+        </div>
+        <div class="table-wrap" id="config-table"></div>
+      </section>
+
+      <section class="section" id="files">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Source map</p>
+            <h2>Where to read the code</h2>
+          </div>
+          <p class="section-intro">Repo-relative paths, validated by the link checker. The component inspector carries the precise file and symbol for each node.</p>
+        </div>
+        <div class="table-wrap" id="files-table"></div>
+      </section>
+
+      <section class="section" id="adrs">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Decision record</p>
+            <h2>Performance decisions, including the declines</h2>
+          </div>
+          <p class="section-intro">ADRs 0007/0008/0009 are one migration. 0010 and 0011 were declined on measured numbers and remain part of the record.</p>
+        </div>
+        <div class="table-wrap" id="adr-table"></div>
+      </section>
+
+      <section class="section" id="recipes">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Maintenance</p>
+            <h2>Change recipes</h2>
+          </div>
+          <p class="section-intro">Short checklists for the changes most likely to break an invariant.</p>
+        </div>
+        <div class="recipe-grid" id="recipe-grid"></div>
+      </section>
+
+      <footer class="footer">
+        <div>
+          <strong>Telemetry architecture field guide</strong>
+          <p>Static HTML, vanilla JS, hand-positioned SVG. Open this file directly or serve <code>docs/telemetry/</code>.</p>
+        </div>
+        <div class="footer-meta">
+          <span>Read-only viewer</span>
+          <span>Verified 2026-10-27</span>
+          <a href="#overview">Back to top</a>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <noscript>
+    <div class="noscript">This guide uses JavaScript for the interactive map, timelines, and generated tables. The deep dives and section prose remain readable without it.</div>
+  </noscript>
+
+  <script src="data.js"></script>
+  <script src="data.nodes.runtime.js"></script>
+  <script src="data.nodes.viewer.js"></script>
+  <script src="data.edges.js"></script>
+  <script src="data.timelines.js"></script>
+  <script src="data.reference.js"></script>
+  <script src="doc.js"></script>
+</body>
+</html>
