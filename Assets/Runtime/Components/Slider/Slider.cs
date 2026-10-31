@@ -463,6 +463,10 @@ namespace mdu.ui
         
         private void updateSliderInternal()
         {
+            // Deferred/editor-validation calls can arrive after the object was torn down
+            // (or before its RectTransform was assigned) — skip instead of throwing.
+            if (this == null || rectTransform == null) { return; }
+
             var length = binder.data.orientation switch
             {
                 Orientation.Horizontal => rectTransform?.rect.width ?? 1.0f,

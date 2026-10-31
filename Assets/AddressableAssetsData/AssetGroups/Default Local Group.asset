@@ -15,6 +15,12 @@ MonoBehaviour:
   m_GroupName: Default Local Group
   m_GUID: a4594a2abb4474d7eb101ebf69c6acea
   m_SerializeEntries:
+  - m_GUID: 0978d6f76d09548b3ad35108735cfc72
+    m_Address: CreditsView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
+    FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 0f9f01436107b418f8bd888f443c3a30
     m_Address: mdu.ui.GridView
     m_ReadOnly: 0
@@ -26,6 +32,12 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels:
     - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 338d300c2001943298ddb90b4c7a483c
+    m_Address: OptionsView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 49ece7692ab32450ebba0465364f9945
     m_Address: mdu.ui.Snackbar
@@ -44,6 +56,12 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels:
     - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5a02deb4c99a046378de9a260829dd00
+    m_Address: MainMenuView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
     FlaggedDuringContentUpdateRestriction: 0
   - m_GUID: 6cf5376a0a1e047e98ec2150692dbc42
     m_Address: mdu.ui.Surface
@@ -146,6 +164,12 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels:
     - UIComponent
+    FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: f6c441ff838ca437e95edafdf2aa2c06
+    m_Address: MultiplayerView
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - UIView
     FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 752e168d0015f422ebbab621595e9597, type: 2}

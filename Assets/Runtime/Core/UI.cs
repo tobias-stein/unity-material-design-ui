@@ -42,9 +42,15 @@ namespace mdu.ui
         void setupUI(UISettings uISettings);
         void refresh();
 
-        void ensureUniqueId(HashSet<string> takenIds);
+        void ensureUniqueId(HashSet<string> takenIds, bool forceNew = false);
 #if UNITY_EDITOR
         void OnValidate();
+
+        /// <summary>
+        /// Clears the serialized id. Prefab assets must never carry ids: every
+        /// instantiated clone gets its own id at runtime instead.
+        /// </summary>
+        void clearPrefabId();
 #endif
     }
 
@@ -170,20 +176,38 @@ namespace mdu.ui
             return null;
         }
 
-        public void ensureUniqueId(HashSet<string> takenIds)
+        public void ensureUniqueId(HashSet<string> takenIds, bool forceNew = false)
         {
-            if (!string.IsNullOrEmpty(_id) && takenIds.Add(_id))
+            if (!forceNew && !string.IsNullOrEmpty(_id) && takenIds.Add(_id))
             {
                 return;
             }
 
-            _id = Guid.NewGuid().ToString("N");
+            string newId;
+            do
+            {
+                newId = Guid.NewGuid().ToString("N");
+            }
+            while (!takenIds.Add(newId));
+
+            _id = newId;
         }
+
+#if UNITY_EDITOR
+        public void clearPrefabId()
+        {
+            _id = string.Empty;
+        }
+#endif
 
         public virtual void Constructor()
         {
             try
             {
+                // Assign before the prefab check: editor-side validation (e.g. Slider.OnValidate)
+                // calls into setup/refresh logic that may legitimately use rectTransform.
+                rectTransform = GetComponent<RectTransform>();
+
                 // if (UnityEngine.Application.isPlaying)
                 {
 #if UNITY_EDITOR
@@ -194,8 +218,6 @@ namespace mdu.ui
 #endif
                     _id = string.IsNullOrWhiteSpace(_id) ? Guid.NewGuid().ToString("N") : _id;
                 }
-
-                rectTransform = GetComponent<RectTransform>();
 
                 binder.onBindingChanged = null;
                 binder.onBindingCompleted = null;
@@ -467,7 +489,7 @@ namespace mdu.ui
                     var components = new List<IUI>();
                     for (int i = 0; i < preCacheCount; i++)
                     {
-                        components.Add(create(prefab, _cachedUITransform));
+                        components.Add(create(prefab, _cachedUITransform, componentType));
                         await UniTask.Yield();
                     }
 
@@ -581,9 +603,13 @@ namespace mdu.ui
                 }
             }
 
+            // Multiple IUI components can live on the same GameObject (e.g. a view and its
+            // WindowFrame); construct each GameObject only once — construct() handles all
+            // of its IUI components.
+            var constructed = new HashSet<GameObject>();
             foreach (var element in adopted)
             {
-                if (element is Component component)
+                if (element is Component component && constructed.Add(component.gameObject))
                 {
                     construct(component.gameObject);
                 }
@@ -683,7 +709,17 @@ namespace mdu.ui
                     }
                     else
                     {
-                        Debug.LogWarning($"UI element '{element}' ID '{element.id}' is not unique!");
+                        // Safety net: runtime clones get fresh ids in assignRuntimeIds(),
+                        // so this should only trigger for elements that bypassed the
+                        // normal creation paths. Repair instead of leaving a broken cache.
+                        using (HashSetPool<string>.Get(out var takenIds))
+                        {
+                            takenIds.UnionWith(_current._uiElements.Keys);
+                            element.ensureUniqueId(takenIds, true);
+                        }
+
+                        _current._uiElements[element.id] = element;
+                        Debug.LogWarning($"UI element '{element}' had a non-unique ID; reassigned to '{element.id}'.");
 #if UNITY_EDITOR
                         Selection.activeGameObject = element.rectTransform.gameObject;
                         Debug.Break();
@@ -713,11 +749,15 @@ namespace mdu.ui
 
             var prefab = await Addressables.LoadAssetAsync<GameObject>(typeof(T).FullName).ToUniTask();
 
-
-            return (T)create(prefab, parent);
+            return (T)create(prefab, parent, typeof(T));
         }
 
-        private static IUI create(GameObject prefab, Transform parent)
+        /// <summary>
+        /// Instantiates the prefab and returns the IUI component of <paramref name="requestedType"/>.
+        /// A prefab may carry several IUI components on the same GameObject (e.g. a UIView and its
+        /// WindowFrame), so returning the first IUI found would pick the wrong component.
+        /// </summary>
+        private static IUI create(GameObject prefab, Transform parent, Type requestedType = null)
         {
             GameObject gameObject = null;
             if (prefab.TryGetComponent<IView>(out var view))
@@ -730,6 +770,20 @@ namespace mdu.ui
             }
 
             construct(gameObject);
+            assignRuntimeIds(gameObject);
+
+            if (requestedType != null)
+            {
+                var requested = gameObject.GetComponent(requestedType) as IUI;
+                if (requested == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Prefab '{prefab.name}' has no component of type '{requestedType.FullName}'. " +
+                        $"Make sure the Addressables entry for '{requestedType.FullName}' points to the correct prefab.");
+                }
+
+                return requested;
+            }
 
             return gameObject.GetComponent<IUI>();
         }
@@ -746,10 +800,44 @@ namespace mdu.ui
                 construct(child.gameObject);
             }
 
-            // then call the Constructor
-            if (gameObject.TryGetComponent<IUI>(out var uiElement))
+            // then call the Constructor on every IUI component of this GameObject:
+            // a single GameObject can legitimately implement multiple UI elements
+            // (e.g. a UIView that also owns a WindowFrame).
+            using (ListPool<IUI>.Get(out var uiElements))
             {
-                uiElement.Constructor();
+                gameObject.GetComponents(uiElements);
+                foreach (var uiElement in uiElements)
+                {
+                    uiElement.Constructor();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gives every UI element in a freshly instantiated hierarchy its own id.
+        /// Prefabs must not leak serialized ids into instances: a prefab asset can
+        /// legitimately be duplicated authored ids (e.g. Save As / duplicate), and
+        /// every clone would then share the same id. Runtime clones always get a
+        /// fresh id; scene elements adopted from a scene keep their serialized ids
+        /// (see <see cref="adoptScene"/>).
+        /// </summary>
+        private static void assignRuntimeIds(GameObject root)
+        {
+            using (HashSetPool<string>.Get(out var takenIds))
+            {
+                if (_current != null)
+                {
+                    takenIds.UnionWith(_current._uiElements.Keys);
+                }
+
+                using (ListPool<IUI>.Get(out var uiElements))
+                {
+                    root.GetComponentsInChildren<IUI>(true, uiElements);
+                    foreach (var uiElement in uiElements)
+                    {
+                        uiElement.ensureUniqueId(takenIds, true);
+                    }
+                }
             }
         }
 
